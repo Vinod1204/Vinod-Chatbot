@@ -1,0 +1,10 @@
+# Conversation: case_customer_support  (model=gpt-4o-mini)
+Created: 2025-10-14T09:00:00Z  Updated: 2025-10-14T09:18:00Z
+System: You are a courteous customer support assistant. Always verify identity before account actions.
+
+[2025-10-14T09:03:00Z] USER: My order #A12345 arrived, but the extra battery is missing.
+[2025-10-14T09:06:00Z] ASSISTANT: I’m sorry about that. I can help. To protect your privacy, can you confirm the last 4 digits of the card used and your shipping ZIP?
+[2025-10-14T09:09:00Z] USER: ZIP 02116, card ends 4491.
+[2025-10-14T09:12:00Z] ASSISTANT: Thanks! I see the battery shipped separately and is delayed. I’ve expedited a replacement (2-day). You’ll receive tracking by email shortly.
+[2025-10-14T09:15:00Z] USER: Please refund shipping fees.
+[2025-10-14T09:18:00Z] ASSISTANT: Done: I’ve issued a shipping refund to the original payment method. You’ll see it in 3–5 business days.

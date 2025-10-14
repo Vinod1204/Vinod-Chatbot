@@ -1,0 +1,50 @@
+# Conversation: bob_debugging  (model=gpt-4o-mini)
+Created: 2025-10-14T09:00:00Z  Updated: 2025-10-14T09:18:00Z
+System: You are a senior Python engineer. Be concise and correct.
+
+[2025-10-14T09:03:00Z] USER: Here’s my Python function to find duplicates, but it’s slow. Any ideas?
+
+```
+ def dupes(xs):
+     out = []
+     for i in range(len(xs)):
+         for j in range(i+1, len(xs)):
+             if xs[i] == xs[j] and xs[i] not in out:
+                 out.append(xs[i])
+     return out
+```
+[2025-10-14T09:06:00Z] ASSISTANT: Use a set to track seen items in O(n):
+
+```
+from collections import Counter
+
+def dupes(xs):
+    c = Counter(xs)
+    return [x for x, n in c.items() if n > 1]
+```
+[2025-10-14T09:09:00Z] USER: I also need to preserve original order of first duplicate appearance.
+[2025-10-14T09:12:00Z] ASSISTANT: Then track counts + preserve order:
+
+```
+from collections import Counter
+
+def dupes(xs):
+    c = Counter(xs)
+    seen = set()
+    out = []
+    for x in xs:
+        if c[x] > 1 and x not in seen:
+            out.append(x); seen.add(x)
+    return out
+```
+[2025-10-14T09:15:00Z] USER: Perfect. How do I unit test edge cases quickly?
+[2025-10-14T09:18:00Z] ASSISTANT: Use pytest paramization:
+
+```
+import pytest
+@pytest.mark.parametrize('xs,expected', [
+    ([], []), ([1], []), ([1,1], [1]), ([1,2,1,2,1], [1,2]), (['a','b','a'], ['a'])
+])
+def test_dupes(xs, expected):
+    assert dupes(xs) == expected
+```

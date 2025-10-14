@@ -1,0 +1,68 @@
+{
+  "conversation_id": "bob_debugging",
+  "model": "gpt-4o-mini",
+  "system_prompt": "You are a senior Python engineer. Be concise and correct.",
+  "created_at": "2025-10-14T09:00:00Z",
+  "updated_at": "2025-10-14T09:18:00Z",
+  "participants": {
+    "user": {
+      "name": "user"
+    },
+    "assistant": {
+      "name": "assistant"
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Here’s my Python function to find duplicates, but it’s slow. Any ideas?\n\n```\n def dupes(xs):\n     out = []\n     for i in range(len(xs)):\n         for j in range(i+1, len(xs)):\n             if xs[i] == xs[j] and xs[i] not in out:\n                 out.append(xs[i])\n     return out\n```",
+      "timestamp": "2025-10-14T09:03:00Z",
+      "metadata": {}
+    },
+    {
+      "role": "assistant",
+      "content": "Use a set to track seen items in O(n):\n\n```\nfrom collections import Counter\n\ndef dupes(xs):\n    c = Counter(xs)\n    return [x for x, n in c.items() if n > 1]\n```",
+      "timestamp": "2025-10-14T09:06:00Z",
+      "metadata": {},
+      "usage": {
+        "prompt_tokens": 151,
+        "completion_tokens": 74,
+        "total_tokens": 225
+      }
+    },
+    {
+      "role": "user",
+      "content": "I also need to preserve original order of first duplicate appearance.",
+      "timestamp": "2025-10-14T09:09:00Z",
+      "metadata": {}
+    },
+    {
+      "role": "assistant",
+      "content": "Then track counts + preserve order:\n\n```\nfrom collections import Counter\n\ndef dupes(xs):\n    c = Counter(xs)\n    seen = set()\n    out = []\n    for x in xs:\n        if c[x] > 1 and x not in seen:\n            out.append(x); seen.add(x)\n    return out\n```",
+      "timestamp": "2025-10-14T09:12:00Z",
+      "metadata": {},
+      "usage": {
+        "prompt_tokens": 157,
+        "completion_tokens": 78,
+        "total_tokens": 235
+      }
+    },
+    {
+      "role": "user",
+      "content": "Perfect. How do I unit test edge cases quickly?",
+      "timestamp": "2025-10-14T09:15:00Z",
+      "metadata": {}
+    },
+    {
+      "role": "assistant",
+      "content": "Use pytest paramization:\n\n```\nimport pytest\n@pytest.mark.parametrize('xs,expected', [\n    ([], []), ([1], []), ([1,1], [1]), ([1,2,1,2,1], [1,2]), (['a','b','a'], ['a'])\n])\ndef test_dupes(xs, expected):\n    assert dupes(xs) == expected\n```",
+      "timestamp": "2025-10-14T09:18:00Z",
+      "metadata": {},
+      "usage": {
+        "prompt_tokens": 163,
+        "completion_tokens": 82,
+        "total_tokens": 245
+      }
+    }
+  ]
+}

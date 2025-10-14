@@ -1,0 +1,10 @@
+# Conversation: alice_travel  (model=gpt-4o-mini)
+Created: 2025-10-14T09:00:00Z  Updated: 2025-10-14T09:18:00Z
+System: You are a meticulous travel planner.
+
+[2025-10-14T09:03:00Z] USER: Hi! Plan me a 3-day Seoul food itinerary. I prefer walking and markets.
+[2025-10-14T09:06:00Z] ASSISTANT: Absolutely! Here’s a walking-friendly, market-forward 3‑day plan: Day 1: Gwangjang Market for bindaetteok and mayak kimbap… Day 2: Tongin Market and Seochon… Day 3: Mangwon Market and Yeonnam-dong. I’ll keep transfers minimal.
+[2025-10-14T09:09:00Z] USER: I love spicy food and want one great BBQ dinner.
+[2025-10-14T09:12:00Z] ASSISTANT: Great! I’ll add spicy options (tteokbokki at Sindang, dakgalbi in Myeongdong) and book BBQ at Maple Tree House or Yeontabal for Day 2 evening.
+[2025-10-14T09:15:00Z] USER: Next morning, add a coffee crawl near Yeonnam.
+[2025-10-14T09:18:00Z] ASSISTANT: Added a Yeonnam coffee crawl (Fritz, Anthracite, Coffee Libre). I’ve slotted it before Mangwon on Day 3 to keep walking distances short.
