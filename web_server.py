@@ -23,9 +23,9 @@ from multi_turn_chatbot import (
     Conversation,
     ConversationStore,
     Message,
+    create_openai_client,
     utc_now,
 )
-from openai import OpenAI
 
 try:
     # Keep environment handling consistent with the CLI script.
@@ -52,7 +52,7 @@ TEMPERATURE = float(os.getenv("CHATBOT_TEMPERATURE", "0.7"))
 TOP_P = float(os.getenv("CHATBOT_TOP_P", "1.0"))
 
 store = ConversationStore(CONVERSATION_ROOT)
-client = OpenAI()
+client = create_openai_client()
 bot = Chatbot(client, store, temperature=TEMPERATURE, top_p=TOP_P)
 
 app = FastAPI(title="Multi-Turn Chatbot API", version="0.1.0")

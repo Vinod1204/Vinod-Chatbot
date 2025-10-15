@@ -33,6 +33,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import argparse
 import os
+import warnings
 from typing import List, Dict, Any, Optional
 
 try:
@@ -51,6 +52,24 @@ ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime(ISO)
+
+
+def create_openai_client() -> OpenAI:
+    """Return an OpenAI client optionally wrapped with Langfuse tracing."""
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    if public_key and secret_key:
+        try:
+            from langfuse.openai import LangfuseOpenAI
+
+            return LangfuseOpenAI()
+        except ImportError:  # pragma: no cover - optional integration
+            warnings.warn(
+                "Langfuse environment variables detected but the 'langfuse' package is missing. "
+                "Install it or unset the variables to silence this warning.",
+                RuntimeWarning,
+            )
+    return OpenAI()
 
 
 @dataclass
@@ -242,7 +261,7 @@ def main():
             f"Loaded conversation '{args.id}' (model={conv.model}). Messages so far: {len(conv.messages)}")
 
     # Initialize OpenAI client (uses OPENAI_API_KEY from env)
-    client = OpenAI()
+    client = create_openai_client()
     bot = Chatbot(client, store, temperature=args.temperature,
                   top_p=args.top_p)
 

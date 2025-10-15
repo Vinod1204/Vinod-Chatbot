@@ -25,6 +25,9 @@ Define the following environment variables before running locally or deploying:
 | Backend    | `ALLOWED_ORIGINS`     | Comma-separated list of origins allowed to call the API (include the deployed frontend URL). |
 | Backend    | `CONVERSATION_ROOT`   | Directory for persisted conversations (defaults to `conversations/`). |
 | Backend    | `CHATBOT_TEMPERATURE` | Optional override for the assistant’s sampling temperature. |
+| Backend    | `LANGFUSE_PUBLIC_KEY` | Optional: enable Langfuse tracing when paired with `LANGFUSE_SECRET_KEY`. |
+| Backend    | `LANGFUSE_SECRET_KEY` | Optional: secret token for Langfuse. |
+| Backend    | `LANGFUSE_HOST`       | Optional: override Langfuse host (defaults to `https://cloud.langfuse.com`). |
 | Frontend   | `VITE_API_URL`        | Points the Vite app to the FastAPI backend. Required in production. |
 | Frontend   | `VITE_DEFAULT_MODEL`  | Optional default OpenAI model identifier for new conversations. |
 
@@ -45,6 +48,10 @@ uvicorn web_server:app --reload
 ```
 
 The API listens on `http://localhost:8000` by default. Update `ALLOWED_ORIGINS`, `CONVERSATION_ROOT`, `CHATBOT_TEMPERATURE`, etc., via environment variables if needed.
+
+### Telemetry with Langfuse (optional)
+
+If you provide `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`, the app will automatically wrap the OpenAI SDK with Langfuse’s OpenAI client. This captures spans, prompts, and responses without changing any API calls. Set `LANGFUSE_HOST` when self-hosting Langfuse. Remove or unset these variables to disable tracing.
 
 ### Database (optional SQLite bootstrap)
 
