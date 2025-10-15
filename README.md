@@ -79,6 +79,14 @@ vercel --prod
 - Promote to production with `vercel --prod`, or trigger a deploy from the dashboard after pushing to the connected Git repository.
 - Host the FastAPI backend separately (Render, Azure, Railway, etc.) or port it into Vercel serverless/Edge Functions, then set `VITE_API_URL` so the React app calls the production API.
 
+### Deploying the backend for production
+
+1. Choose a Python-friendly host that keeps `uvicorn` (or Gunicorn + Uvicorn workers) running—Render, Railway, Fly.io, Azure App Service, and DigitalOcean App Platform all work well.
+2. Configure your environment variables there (`OPENAI_API_KEY`, `ALLOWED_ORIGINS`, `CONVERSATION_ROOT`, any database URLs). Include the deployed frontend origin in `ALLOWED_ORIGINS` so browsers can reach the API.
+3. Expose the app with a command like `uvicorn web_server:app --host 0.0.0.0 --port 8000`. Some platforms expect a `start` script; align with their docs.
+4. After deployment, copy the public API URL and add it as `VITE_API_URL` in the Vercel project settings (Project Settings → Environment Variables). Redeploy the frontend so the new variable ships to users.
+5. Optionally add a staging environment: point Vercel preview deployments at the staging backend and reserve the production value for the `Production` environment in Vercel settings.
+
 ## Project structure
 
 ```
