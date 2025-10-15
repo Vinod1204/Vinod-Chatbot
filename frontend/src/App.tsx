@@ -32,6 +32,36 @@ import { CalculatorPanel } from "./components/CalculatorPanel";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 const DEFAULT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) ?? "gpt-4o-mini";
+const FEMALE_VOICE_HINTS = [
+    "female",
+    "zira",
+    "aria",
+    "joanna",
+    "amy",
+    "emma",
+    "salli",
+    "ivy",
+    "sarah",
+    "olivia",
+    "samantha",
+    "nova",
+    "alloy",
+];
+const MALE_VOICE_HINTS = [
+    "male",
+    "david",
+    "guy",
+    "matthew",
+    "brian",
+    "joey",
+    "kevin",
+    "stephen",
+    "justin",
+    "liam",
+    "oliver",
+    "roger",
+    "alloy",
+];
 
 const toMessages = (conversation: ConversationDetail): Message[] =>
     conversation.messages.map((entry, index) => ({
@@ -327,9 +357,13 @@ export default function App() {
         if (voices.length === 0) {
             return null;
         }
-        const desired = voices.find((voice) =>
-            voice.name.toLowerCase().includes(voiceGender === "female" ? "female" : "male"),
+        const hints = (voiceGender === "female" ? FEMALE_VOICE_HINTS : MALE_VOICE_HINTS).map((hint) =>
+            hint.toLowerCase(),
         );
+        const desired = voices.find((voice) => {
+            const lower = voice.name.toLowerCase();
+            return hints.some((hint) => lower.includes(hint));
+        });
         if (desired) {
             return desired;
         }
