@@ -31,6 +31,16 @@ uvicorn web_server:app --reload
 
 The API listens on `http://localhost:8000` by default. Update `ALLOWED_ORIGINS`, `CONVERSATION_ROOT`, `CHATBOT_TEMPERATURE`, etc., via environment variables if needed.
 
+### Database (optional SQLite bootstrap)
+
+By default the `ConversationStore` keeps JSON files inside `conversations/`. If you prefer to experiment with a relational store (for analytics, dashboards, or future multi-user support), you can seed a lightweight SQLite database:
+
+```powershell
+python -c "import sqlite3, pathlib; db = pathlib.Path('data/chatbot.db'); db.parent.mkdir(parents=True, exist_ok=True); schema = '''CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, model TEXT NOT NULL, system_prompt TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL, content TEXT NOT NULL, timestamp TEXT NOT NULL);'''; conn = sqlite3.connect(db); conn.executescript(schema); conn.close(); print(f'Initialized {db}')"
+```
+
+The command creates `data/chatbot.db` with two baseline tables you can extend as needed. Point any experimental code or services at that path (for example, via a `DATABASE_URL=sqlite:///data/chatbot.db` environment variable) when you swap the storage layer to SQLite.
+
 ### Available routes
 
 - `GET /health` – uptime check.
@@ -52,6 +62,22 @@ npm run dev
 The Vite dev server runs on `http://localhost:5173` and proxies requests directly to the FastAPI backend (ensure the backend is running on port 8000).
 
 Update `VITE_API_URL` or `VITE_DEFAULT_MODEL` in a `frontend/.env` if you need to point to a different backend or default model.
+
+## Deploying the frontend on Vercel
+
+```powershell
+npm install -g vercel
+vercel login
+cd frontend
+npm install
+vercel
+vercel --prod
+```
+
+- The first `vercel` command creates a preview deployment; accept the Vite/React defaults (build `npm run build`, output `dist`).
+- Set any required environment variables in the Vercel dashboard under Project Settings → Environment Variables and redeploy when you update them.
+- Promote to production with `vercel --prod`, or trigger a deploy from the dashboard after pushing to the connected Git repository.
+- Host the FastAPI backend separately (Render, Azure, Railway, etc.) or port it into Vercel serverless/Edge Functions, then set `VITE_API_URL` so the React app calls the production API.
 
 ## Project structure
 
