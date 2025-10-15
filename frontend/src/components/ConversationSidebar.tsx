@@ -3,20 +3,6 @@ import { KeyboardEvent } from "react";
 import { MessageSquare, Plus, Trash2 } from "lucide-react";
 import type { ConversationSummary } from "../types";
 
-const formatDate = (iso: string): string => {
-    try {
-        const dt = new Date(iso);
-        return dt.toLocaleString(undefined, {
-            hour: "2-digit",
-            minute: "2-digit",
-            month: "short",
-            day: "numeric",
-        });
-    } catch (error) {
-        return iso;
-    }
-};
-
 type SidebarProps = {
     conversations: ConversationSummary[];
     activeConversationId: string | null;
@@ -68,9 +54,11 @@ export function ConversationSidebar({
                     >
                         <div className="conversation-info">
                             <span className="conversation-name">{conversation.conversationId}</span>
-                            <span className="conversation-meta">
-                                {conversation.messageCount} messages · {formatDate(conversation.updatedAt)}
-                            </span>
+                            {conversation.messageCount > 0 ? (
+                                <span className="conversation-meta">
+                                    {conversation.messageCount} {conversation.messageCount === 1 ? "message" : "messages"}
+                                </span>
+                            ) : null}
                         </div>
                         <button
                             type="button"
