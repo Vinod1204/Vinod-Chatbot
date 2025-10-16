@@ -249,6 +249,21 @@ body {
     gap: 12px;
 }
 
+.chat-heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.chat-title {
+    display: grid;
+    gap: 4px;
+}
+
+.sidebar-toggle {
+    padding: 8px;
+}
+
 .chat-header h1 {
     font-size: 1.5rem;
     margin: 0 0 4px;

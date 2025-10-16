@@ -489,12 +489,25 @@ export default function App() {
                         <>
                             <div className="chat-top">
                                 <header className="chat-header">
-                                    <div>
-                                        <h1>{currentConversation.conversationId}</h1>
-                                        {currentConversation.systemPrompt &&
-                                            currentConversation.systemPrompt !== "You are a helpful assistant." ? (
-                                            <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
-                                        ) : null}
+                                    <div className="chat-heading">
+                                        <button
+                                            type="button"
+                                            className={clsx("icon-button", "sidebar-toggle", {
+                                                active: isSidebarOpen === false,
+                                            })}
+                                            onClick={() => setIsSidebarOpen((prev) => !prev)}
+                                            aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+                                            aria-pressed={!isSidebarOpen}
+                                        >
+                                            {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+                                        </button>
+                                        <div className="chat-title">
+                                            <h1>{currentConversation.conversationId}</h1>
+                                            {currentConversation.systemPrompt &&
+                                                currentConversation.systemPrompt !== "You are a helpful assistant." ? (
+                                                <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
+                                            ) : null}
+                                        </div>
                                     </div>
                                     <div className="chat-tools">
                                         <span className="badge">
@@ -509,15 +522,6 @@ export default function App() {
                                             aria-label="Toggle calculator"
                                         >
                                             <Calculator size={18} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={clsx("icon-button", { active: isSidebarOpen === false })}
-                                            onClick={() => setIsSidebarOpen((prev) => !prev)}
-                                            aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-                                            aria-pressed={!isSidebarOpen}
-                                        >
-                                            {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
                                         </button>
                                         <button
                                             type="button"
