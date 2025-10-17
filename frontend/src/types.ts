@@ -2,6 +2,7 @@ import type { Message } from "ai";
 
 export type ConversationSummary = {
     conversationId: string;
+    title: string;
     model: string;
     createdAt: string;
     updatedAt: string;
@@ -31,8 +32,7 @@ export type ChatResponse = {
 };
 
 export type CreateConversationPayload = {
-    conversationId: string;
-    model?: string;
+    title: string;
     systemPrompt?: string;
     overwrite?: boolean;
 };

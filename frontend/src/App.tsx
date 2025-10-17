@@ -2,16 +2,20 @@ import { FormEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useMe
 import { Message, useChat } from "ai/react";
 import {
     Calculator,
+    Mic,
+    MicOff,
     Loader2,
     Moon,
     PanelLeftClose,
     PanelLeftOpen,
     Plus,
+    Settings2,
     SendHorizonal,
     Sparkles,
     Sun,
     Volume2,
     StopCircle,
+    X,
 } from "lucide-react";
 import clsx from "clsx";
 import {
@@ -29,9 +33,7 @@ import { ConversationSidebar } from "./components/ConversationSidebar";
 import { MessageBubble } from "./components/MessageBubble";
 import { CreateConversationDialog } from "./components/CreateConversationDialog";
 import { CalculatorPanel } from "./components/CalculatorPanel";
-
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
-const DEFAULT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) ?? "gpt-4o-mini";
 const FEMALE_VOICE_HINTS = [
     "female",
     "zira",
@@ -46,6 +48,11 @@ const FEMALE_VOICE_HINTS = [
     "samantha",
     "nova",
     "alloy",
+    "victoria",
+    "karen",
+    "natalie",
+    "linda",
+    "siri",
 ];
 const MALE_VOICE_HINTS = [
     "male",
@@ -61,7 +68,40 @@ const MALE_VOICE_HINTS = [
     "oliver",
     "roger",
     "alloy",
+    "alex",
+    "fred",
+    "daniel",
+    "arthur",
+    "george",
+    "ralph",
+    "henry",
 ];
+
+type SpeechRecognitionInstance = {
+    continuous: boolean;
+    interimResults: boolean;
+    lang: string;
+    maxAlternatives: number;
+    start: () => void;
+    stop: () => void;
+    abort?: () => void;
+    onresult: ((event: any) => void) | null;
+    onerror: ((event: any) => void) | null;
+    onend: (() => void) | null;
+};
+
+type RecognitionConstructor = new () => SpeechRecognitionInstance;
+
+const getSpeechRecognition = (): RecognitionConstructor | null => {
+    if (typeof window === "undefined") {
+        return null;
+    }
+    const globalWindow = window as Window & typeof globalThis & {
+        SpeechRecognition?: RecognitionConstructor;
+        webkitSpeechRecognition?: RecognitionConstructor;
+    };
+    return globalWindow.SpeechRecognition || globalWindow.webkitSpeechRecognition || null;
+};
 
 const toMessages = (conversation: ConversationDetail): Message[] =>
     conversation.messages.map((entry, index) => ({
@@ -77,6 +117,7 @@ const summariseConversation = (
     const filtered = summaries.filter((item) => item.conversationId !== detail.conversationId);
     const summary: ConversationSummary = {
         conversationId: detail.conversationId,
+        title: detail.title,
         model: detail.model,
         createdAt: detail.createdAt,
         updatedAt: detail.updatedAt,
@@ -100,6 +141,9 @@ export default function App() {
     const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
     const [speechSupported, setSpeechSupported] = useState(false);
     const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+    const [isUtilitiesOpen, setIsUtilitiesOpen] = useState(false);
+    const [isVoiceSearchSupported, setIsVoiceSearchSupported] = useState(false);
+    const [isVoiceSearching, setIsVoiceSearching] = useState(false);
     const [theme, setTheme] = useState<"light" | "dark">(() => {
         if (typeof window === "undefined") {
             return "light";
@@ -121,11 +165,28 @@ export default function App() {
         typeof window === "undefined" ? false : window.innerWidth < 960,
     );
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const voiceSeedRef = useRef("");
+    const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+    const voiceRetryRef = useRef<number | null>(null);
 
     const { messages, append, isLoading, setMessages, input, handleInputChange, setInput } = useChat({
         api: `${API_BASE}/api/chat`,
         sendExtraMessageFields: true,
     });
+
+    const normaliseTitle = useCallback((value: string): string => {
+        const normalized = value
+            .trim()
+            .replace(/[_-]+/g, " ")
+            .replace(/\s+/g, " ");
+        if (!normalized) {
+            return "";
+        }
+        return normalized
+            .split(" ")
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+            .join(" ");
+    }, []);
 
     useEffect(() => {
         if (typeof document !== "undefined") {
@@ -151,8 +212,15 @@ export default function App() {
     }, []);
 
     useEffect(() => {
+        if (getSpeechRecognition()) {
+            setIsVoiceSearchSupported(true);
+        }
+    }, []);
+
+    useEffect(() => {
         if (isCompactLayout) {
             setIsResizing(false);
+            setIsSidebarOpen(false);
         }
     }, [isCompactLayout]);
 
@@ -189,6 +257,20 @@ export default function App() {
     }, [isResizing]);
 
     useEffect(() => {
+        return () => {
+            if (!recognitionRef.current) {
+                return;
+            }
+            try {
+                recognitionRef.current.stop();
+            } catch (_error) {
+                recognitionRef.current.abort?.();
+            }
+            recognitionRef.current = null;
+        };
+    }, []);
+
+    useEffect(() => {
         if (typeof window === "undefined" || !window.speechSynthesis) {
             return;
         }
@@ -201,14 +283,31 @@ export default function App() {
             }
         };
         populateVoices();
-        synth.addEventListener("voiceschanged", populateVoices);
-        return () => synth.removeEventListener("voiceschanged", populateVoices);
+        const handleVoicesChanged = () => populateVoices();
+        synth.addEventListener("voiceschanged", handleVoicesChanged);
+        if (synth.getVoices().length === 0) {
+            voiceRetryRef.current = window.setTimeout(populateVoices, 350);
+        }
+        return () => {
+            synth.removeEventListener("voiceschanged", handleVoicesChanged);
+            if (voiceRetryRef.current !== null) {
+                window.clearTimeout(voiceRetryRef.current);
+                voiceRetryRef.current = null;
+            }
+        };
     }, []);
+
+    useEffect(() => {
+        setIsUtilitiesOpen(false);
+    }, [currentConversation?.conversationId]);
 
     const handleSelectConversation = useCallback(
         async (conversationId: string) => {
             setActiveConversationId(conversationId);
             setToast(null);
+            if (isCompactLayout) {
+                setIsSidebarOpen(false);
+            }
             try {
                 const detail = await getConversation(conversationId);
                 setCurrentConversation(detail);
@@ -218,7 +317,7 @@ export default function App() {
                 setToast({ type: "error", message });
             }
         },
-        [setMessages],
+        [isCompactLayout, setMessages],
     );
 
     const refreshConversations = useCallback(async () => {
@@ -292,6 +391,255 @@ export default function App() {
         [activeConversationId, setMessages],
     );
 
+    const handleShareConversation = useCallback(
+        async (conversationId: string) => {
+            const conversation = conversations.find((item) => item.conversationId === conversationId);
+            const title = conversation?.title ?? conversationId;
+            if (typeof window === "undefined") {
+                setToast({ type: "error", message: "Sharing is not available." });
+                return;
+            }
+            const shareUrl = `${window.location.origin}?conversation=${encodeURIComponent(conversationId)}`;
+            const nav = window.navigator as Navigator & {
+                share?: (data: ShareData) => Promise<void>;
+                clipboard?: Clipboard;
+            };
+            try {
+                if (nav.share) {
+                    await nav.share({ title, text: title, url: shareUrl });
+                    setToast({ type: "success", message: "Share link sent." });
+                    return;
+                }
+                if (nav.clipboard?.writeText) {
+                    await nav.clipboard.writeText(shareUrl);
+                    setToast({ type: "success", message: "Link copied to clipboard." });
+                    return;
+                }
+            } catch (error) {
+                if (error instanceof DOMException && error.name === "AbortError") {
+                    setToast({ type: "error", message: "Share cancelled." });
+                } else {
+                    setToast({ type: "error", message: "Could not share the conversation." });
+                }
+                return;
+            }
+            setToast({ type: "error", message: "Sharing is not supported on this device." });
+        },
+        [conversations, setToast],
+    );
+
+    const handleSaveConversationAsPdf = useCallback(
+        async (conversationId: string) => {
+            if (typeof window === "undefined") {
+                setToast({ type: "error", message: "Saving is only available in the browser." });
+                return;
+            }
+            try {
+                const detail =
+                    currentConversation && currentConversation.conversationId === conversationId
+                        ? currentConversation
+                        : await getConversation(conversationId);
+                if (!detail) {
+                    setToast({ type: "error", message: "Conversation not found." });
+                    return;
+                }
+                const iframe = document.createElement("iframe");
+                iframe.style.position = "fixed";
+                iframe.style.right = "0";
+                iframe.style.bottom = "0";
+                iframe.style.width = "0";
+                iframe.style.height = "0";
+                iframe.style.border = "0";
+                document.body.appendChild(iframe);
+                const frameWindow = iframe.contentWindow;
+                const frameDocument = frameWindow?.document;
+                if (!frameWindow || !frameDocument) {
+                    iframe.remove();
+                    setToast({ type: "error", message: "Could not prepare the PDF export." });
+                    return;
+                }
+                const escapeHtml = (value: string) =>
+                    value
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#39;");
+                const formatContent = (value: string) => escapeHtml(value).replace(/\n/g, "<br />");
+                const title = detail.title || conversationId;
+                const createdDisplay = new Date(detail.createdAt).toLocaleString();
+                const updatedDisplay = new Date(detail.updatedAt).toLocaleString();
+                const messageMarkup = detail.messages
+                    .map((entry, index) => {
+                        const role =
+                            entry.role === "assistant" ? "Assistant" : entry.role === "user" ? "You" : "System";
+                        const timestamp = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : null;
+                        return `
+                            <article class="message">
+                                <header>
+                                    <span class="role">${escapeHtml(role)}</span>
+                                    <span class="meta">${timestamp ? escapeHtml(timestamp) : ""}</span>
+                                    <span class="index">#${index + 1}</span>
+                                </header>
+                                <div class="content">${formatContent(entry.content)}</div>
+                            </article>
+                        `;
+                    })
+                    .join("");
+                const documentHtml = `<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(title)} - Chat Transcript</title>
+        <style>
+            body {
+                font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                margin: 40px;
+                color: #0f172a;
+                background: #ffffff;
+            }
+            h1 {
+                margin: 0 0 12px;
+                font-size: 28px;
+            }
+            .meta {
+                font-size: 12px;
+                color: #475569;
+            }
+            .summary {
+                margin-bottom: 24px;
+                padding-bottom: 12px;
+                border-bottom: 1px solid #e2e8f0;
+            }
+            .message {
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 16px;
+                background: #f8fafc;
+                break-inside: avoid;
+            }
+            .message header {
+                display: flex;
+                justify-content: space-between;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: #1e293b;
+                margin-bottom: 10px;
+            }
+            .message .content {
+                white-space: pre-wrap;
+                font-size: 14px;
+                line-height: 1.6;
+                color: #0f172a;
+            }
+            .message .meta {
+                font-size: 11px;
+                color: #64748b;
+                margin-left: 12px;
+            }
+            @page {
+                margin: 25mm;
+            }
+        </style>
+    </head>
+    <body>
+        <header class="summary">
+            <h1>${escapeHtml(title)}</h1>
+            <div class="meta">Conversation ID: ${escapeHtml(detail.conversationId)}</div>
+            <div class="meta">Model: ${escapeHtml(detail.model)}</div>
+            <div class="meta">Created: ${escapeHtml(createdDisplay)}</div>
+            <div class="meta">Last updated: ${escapeHtml(updatedDisplay)}</div>
+            <div class="meta">Total messages: ${detail.messageCount}</div>
+        </header>
+        <main>
+            ${messageMarkup || "<p class=\"meta\">No messages yet.</p>"}
+        </main>
+    </body>
+</html>`;
+                frameDocument.open();
+                frameDocument.write(documentHtml);
+                frameDocument.close();
+                let fallbackTimer: number | null = null;
+                const cleanup = () => {
+                    if (fallbackTimer !== null) {
+                        window.clearTimeout(fallbackTimer);
+                        fallbackTimer = null;
+                    }
+                    frameWindow.removeEventListener("afterprint", cleanup);
+                    iframe.remove();
+                };
+                frameWindow.addEventListener("afterprint", cleanup);
+                fallbackTimer = window.setTimeout(cleanup, 5000);
+                frameWindow.focus();
+                try {
+                    frameWindow.print();
+                    setToast({ type: "success", message: "Browser print dialog opened." });
+                } catch (_error) {
+                    cleanup();
+                    setToast({ type: "error", message: "Unable to open the print dialog." });
+                }
+            } catch (_error) {
+                setToast({ type: "error", message: "Could not prepare the PDF export." });
+            }
+        },
+        [currentConversation, setToast],
+    );
+
+    const startVoiceSearch = useCallback(() => {
+        const Recognition = getSpeechRecognition();
+        if (!Recognition) {
+            setToast({ type: "error", message: "Voice search is not available on this device." });
+            return;
+        }
+        voiceSeedRef.current = input.trim();
+        try {
+            const recognition = new Recognition();
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+            recognition.maxAlternatives = 1;
+            recognition.onresult = (event: any) => {
+                const transcript = Array.from(event.results || [])
+                    .map((result: any) => (result[0]?.transcript ?? "").trim())
+                    .join(" ")
+                    .trim();
+                const prefix = voiceSeedRef.current;
+                const nextValue = `${prefix}${prefix ? " " : ""}${transcript}`.trim();
+                setInput(nextValue);
+            };
+            recognition.onerror = () => {
+                setIsVoiceSearching(false);
+                setToast({ type: "error", message: "Could not capture audio. Please try again." });
+            };
+            recognition.onend = () => {
+                setIsVoiceSearching(false);
+                recognitionRef.current = null;
+            };
+            recognitionRef.current = recognition;
+            recognition.start();
+            setIsVoiceSearching(true);
+            setToast(null);
+        } catch (_error) {
+            setIsVoiceSearching(false);
+            setToast({ type: "error", message: "Voice search could not start." });
+        }
+    }, [input, setInput, setToast]);
+
+    const stopVoiceSearch = useCallback(() => {
+        const recognition = recognitionRef.current;
+        if (!recognition) {
+            return;
+        }
+        try {
+            recognition.stop();
+        } catch (_error) {
+            recognition.abort?.();
+        }
+        setIsVoiceSearching(false);
+    }, []);
+
     const handleSendMessage = useCallback(
         async (event: FormEvent<HTMLFormElement>) => {
             event.preventDefault();
@@ -303,6 +651,9 @@ export default function App() {
             if (!trimmed) {
                 return;
             }
+            if (isVoiceSearching) {
+                stopVoiceSearch();
+            }
             setToast(null);
             try {
                 await append(
@@ -310,7 +661,6 @@ export default function App() {
                     {
                         body: {
                             conversationId: activeConversationId,
-                            model: currentConversation?.model ?? DEFAULT_MODEL,
                         },
                     },
                 );
@@ -324,7 +674,7 @@ export default function App() {
                 setToast({ type: "error", message });
             }
         },
-        [activeConversationId, append, currentConversation?.model, input, setInput, setMessages],
+        [activeConversationId, append, input, isVoiceSearching, setInput, setMessages, stopVoiceSearch],
     );
 
     const statusMessage = toast?.message ?? null;
@@ -338,7 +688,7 @@ export default function App() {
         }
         return currentConversation.messages
             .map((entry) => {
-                const speaker = entry.role === "assistant" ? "Assistant" : entry.role === "user" ? "You" : "System";
+                const speaker = entry.role === "assistant" ? "AI" : entry.role === "user" ? "You" : "System";
                 return `${speaker}: ${entry.content}`;
             })
             .join(". ");
@@ -362,10 +712,22 @@ export default function App() {
         );
         const desired = voices.find((voice) => {
             const lower = voice.name.toLowerCase();
-            return hints.some((hint) => lower.includes(hint));
+            const uri = (voice as SpeechSynthesisVoice & { voiceURI?: string }).voiceURI?.toLowerCase() ?? "";
+            return hints.some((hint) => lower.includes(hint) || uri.includes(hint));
         });
         if (desired) {
             return desired;
+        }
+        const genderFallback = voices.find((voice) => {
+            const lower = voice.name.toLowerCase();
+            const uri = (voice as SpeechSynthesisVoice & { voiceURI?: string }).voiceURI?.toLowerCase() ?? "";
+            if (voiceGender === "male") {
+                return lower.includes("male") || uri.includes("male");
+            }
+            return lower.includes("female") || uri.includes("female");
+        });
+        if (genderFallback) {
+            return genderFallback;
         }
         const englishFallback = voices.find((voice) => voice.lang.toLowerCase().startsWith("en"));
         return englishFallback ?? voices[0];
@@ -472,6 +834,13 @@ export default function App() {
                             onDelete={(id) => {
                                 void handleDeleteConversation(id);
                             }}
+                            onShare={(id) => {
+                                void handleShareConversation(id);
+                            }}
+                            onSaveAsPdf={(id) => {
+                                void handleSaveConversationAsPdf(id);
+                            }}
+                            formatTitle={normaliseTitle}
                         />
                     ) : null}
                 </div>
@@ -485,6 +854,91 @@ export default function App() {
                     />
                 ) : null}
                 <section className="chat-card">
+                    {isUtilitiesOpen ? (
+                        <aside className="utility-panel" role="complementary" aria-label="Conversation tools">
+                            <div className="utility-header">
+                                <h2>Quick tools</h2>
+                                <button
+                                    type="button"
+                                    className="icon-button"
+                                    onClick={() => setIsUtilitiesOpen(false)}
+                                    aria-label="Close tools"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            <div className="utility-section">
+                                <h3>Appearance</h3>
+                                <button
+                                    type="button"
+                                    className="icon-button"
+                                    onClick={toggleTheme}
+                                    aria-label="Toggle theme"
+                                >
+                                    {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+                                    <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
+                                </button>
+                            </div>
+                            <div className="utility-section">
+                                <h3>Tools</h3>
+                                <button
+                                    type="button"
+                                    className={clsx("icon-button", { active: showCalculator })}
+                                    onClick={() => setShowCalculator((prev) => !prev)}
+                                    aria-label="Toggle calculator"
+                                    aria-pressed={showCalculator}
+                                >
+                                    <Calculator size={18} />
+                                    <span>{showCalculator ? "Hide calculator" : "Show calculator"}</span>
+                                </button>
+                            </div>
+                            {speechSupported ? (
+                                <div className="utility-section">
+                                    <h3>Voice</h3>
+                                    <div className="voice-toggle">
+                                        <button
+                                            type="button"
+                                            className={clsx("pill-button", { active: voiceGender === "female" })}
+                                            onClick={() => setVoiceGender("female")}
+                                        >
+                                            Female
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={clsx("pill-button", { active: voiceGender === "male" })}
+                                            onClick={() => setVoiceGender("male")}
+                                        >
+                                            Male
+                                        </button>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="icon-button speak-button"
+                                        onClick={isAnythingSpeaking ? handleStopSpeaking : handleSpeakTranscript}
+                                        disabled={!transcript && !isAnythingSpeaking}
+                                    >
+                                        {isAnythingSpeaking ? <StopCircle size={18} /> : <Volume2 size={18} />}
+                                        <span>{isAnythingSpeaking ? "Stop narration" : "Play narration"}</span>
+                                    </button>
+                                </div>
+                            ) : null}
+                            {currentConversation ? (
+                                <div className="utility-section utility-meta">
+                                    <h3>Conversation</h3>
+                                    <dl>
+                                        <div>
+                                            <dt>ID</dt>
+                                            <dd>{currentConversation.conversationId}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>Total messages</dt>
+                                            <dd>{currentConversation.messageCount}</dd>
+                                        </div>
+                                    </dl>
+                                </div>
+                            ) : null}
+                        </aside>
+                    ) : null}
                     {currentConversation ? (
                         <>
                             <div className="chat-top">
@@ -502,7 +956,7 @@ export default function App() {
                                             {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
                                         </button>
                                         <div className="chat-title">
-                                            <h1>{currentConversation.conversationId}</h1>
+                                            <h1>{normaliseTitle(currentConversation.title)}</h1>
                                             {currentConversation.systemPrompt &&
                                                 currentConversation.systemPrompt !== "You are a helpful assistant." ? (
                                                 <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
@@ -516,55 +970,17 @@ export default function App() {
                                         </span>
                                         <button
                                             type="button"
-                                            className={clsx("icon-button", { active: showCalculator })}
-                                            onClick={() => setShowCalculator((prev) => !prev)}
-                                            aria-pressed={showCalculator}
-                                            aria-label="Toggle calculator"
+                                            className={clsx("icon-button", { active: isUtilitiesOpen })}
+                                            onClick={() => setIsUtilitiesOpen((prev) => !prev)}
+                                            aria-label={isUtilitiesOpen ? "Hide tools" : "Show tools"}
+                                            aria-pressed={isUtilitiesOpen}
                                         >
-                                            <Calculator size={18} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="icon-button"
-                                            onClick={toggleTheme}
-                                            aria-label="Toggle theme"
-                                        >
-                                            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+                                            <Settings2 size={18} />
+                                            <span>Tools</span>
                                         </button>
                                     </div>
                                 </header>
-                                {speechSupported ? (
-                                    <div className="voice-controls">
-                                        <div className="voice-choice">
-                                            <span>Voice</span>
-                                            <div className="voice-toggle">
-                                                <button
-                                                    type="button"
-                                                    className={clsx("pill-button", { active: voiceGender === "female" })}
-                                                    onClick={() => setVoiceGender("female")}
-                                                >
-                                                    Female
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className={clsx("pill-button", { active: voiceGender === "male" })}
-                                                    onClick={() => setVoiceGender("male")}
-                                                >
-                                                    Male
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            className="icon-button speak-button"
-                                            onClick={isAnythingSpeaking ? handleStopSpeaking : handleSpeakTranscript}
-                                            disabled={!transcript && !isAnythingSpeaking}
-                                        >
-                                            {isAnythingSpeaking ? <StopCircle size={18} /> : <Volume2 size={18} />}
-                                            <span>{isAnythingSpeaking ? "Stop narration" : "Play narration"}</span>
-                                        </button>
-                                    </div>
-                                ) : null}
+
                             </div>
                             <div className="message-scroll">
                                 {renderedMessages.length === 0 ? (
@@ -594,12 +1010,35 @@ export default function App() {
                                     <div className={clsx("status-bar", statusClass)}>{statusMessage}</div>
                                 ) : null}
                                 <form onSubmit={handleSendMessage}>
-                                    <textarea
-                                        value={input}
-                                        onChange={handleInputChange}
-                                        placeholder="Ask a question or describe a task..."
-                                        disabled={!activeConversationId || isLoading}
-                                    />
+                                    <div className="composer-input">
+                                        <textarea
+                                            value={input}
+                                            onChange={handleInputChange}
+                                            placeholder="Ask a question or describe a task..."
+                                            disabled={!activeConversationId || isLoading}
+                                            aria-label="Message"
+                                        />
+                                        {isVoiceSearchSupported ? (
+                                            <button
+                                                type="button"
+                                                className={clsx("icon-button", "voice-search-button", {
+                                                    active: isVoiceSearching,
+                                                })}
+                                                onClick={() => {
+                                                    if (isVoiceSearching) {
+                                                        stopVoiceSearch();
+                                                    } else {
+                                                        startVoiceSearch();
+                                                    }
+                                                }}
+                                                aria-pressed={isVoiceSearching}
+                                                aria-label={isVoiceSearching ? "Stop voice search" : "Start voice search"}
+                                                disabled={!activeConversationId || isLoading}
+                                            >
+                                                {isVoiceSearching ? <MicOff size={18} /> : <Mic size={18} />}
+                                            </button>
+                                        ) : null}
+                                    </div>
                                     <button
                                         type="submit"
                                         className="send-button"
@@ -631,7 +1070,6 @@ export default function App() {
                 onClose={() => setShowCreateModal(false)}
                 onCreate={(payload) => handleCreateConversation(payload)}
                 isSubmitting={createBusy}
-                defaultModel={DEFAULT_MODEL}
                 error={createError}
             />
         </>

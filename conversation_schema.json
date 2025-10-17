@@ -6,6 +6,9 @@
     "conversation_id": {
       "type": "string"
     },
+    "title": {
+      "type": "string"
+    },
     "model": {
       "type": "string"
     },
@@ -46,6 +49,7 @@
   },
   "required": [
     "conversation_id",
+    "title",
     "model",
     "created_at",
     "updated_at",

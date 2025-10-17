@@ -69,6 +69,7 @@ app.add_middleware(
 
 class ConversationSummary(BaseModel):
     conversationId: str
+    title: str
     model: str
     createdAt: str
     updatedAt: str
@@ -81,14 +82,16 @@ class ConversationDetail(ConversationSummary):
 
 
 class ConversationCreate(BaseModel):
-    conversationId: str = Field(..., min_length=1, max_length=120)
-    model: Optional[str] = None
+    title: str = Field(..., min_length=1, max_length=120)
+    conversationId: Optional[str] = Field(None, min_length=1, max_length=120)
     systemPrompt: Optional[str] = None
     overwrite: bool = False
 
     @validator("conversationId")
-    def validate_conversation_id(cls, value: str) -> str:  # noqa: D401, N805
+    def validate_conversation_id(cls, value: Optional[str]) -> Optional[str]:  # noqa: D401, N805
         """Ensure the id contains only safe characters."""
+        if value is None:
+            return value
         safe = "".join(ch for ch in value if ch.isalnum()
                        or ch in ("-", "_", "."))
         if not safe:
@@ -154,6 +157,7 @@ def _message_to_dict(msg: Message) -> Dict[str, Any]:
 def _conversation_to_dict(conv: Conversation) -> Dict[str, Any]:
     return {
         "conversationId": conv.conversation_id,
+        "title": conv.title,
         "model": conv.model,
         "systemPrompt": conv.system_prompt,
         "createdAt": conv.created_at,
@@ -194,6 +198,7 @@ def _ensure_conversation(
 
     conv = store.create(
         safe_id,
+        title=safe_id,
         model=model or DEFAULT_MODEL,
         system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
         owner=owner,
@@ -220,6 +225,7 @@ def list_conversations(request: Request) -> List[ConversationSummary]:
         summaries.append(
             ConversationSummary(
                 conversationId=conv.conversation_id,
+                title=conv.title,
                 model=conv.model,
                 createdAt=conv.created_at,
                 updatedAt=conv.updated_at,
@@ -233,8 +239,9 @@ def list_conversations(request: Request) -> List[ConversationSummary]:
 @app.post("/api/conversations", response_model=ConversationDetail, status_code=201)
 def create_conversation(payload: ConversationCreate, request: Request) -> ConversationDetail:
     owner = _client_ip(request)
-    if store.exists(payload.conversationId):
-        existing = store.load(payload.conversationId)
+    conversation_id = payload.conversationId or uuid4().hex[:12]
+    if store.exists(conversation_id):
+        existing = store.load(conversation_id)
         if existing.owner != owner:
             raise HTTPException(
                 status_code=409,
@@ -245,8 +252,9 @@ def create_conversation(payload: ConversationCreate, request: Request) -> Conver
                 status_code=409, detail="Conversation already exists")
 
     conv = store.create(
-        payload.conversationId,
-        model=payload.model or DEFAULT_MODEL,
+        conversation_id,
+        title=payload.title,
+        model=DEFAULT_MODEL,
         system_prompt=payload.systemPrompt or DEFAULT_SYSTEM_PROMPT,
         owner=owner,
     )

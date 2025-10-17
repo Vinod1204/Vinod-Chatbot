@@ -85,6 +85,7 @@ class Message:
 @dataclass
 class Conversation:
     conversation_id: str
+    title: str
     model: str
     system_prompt: str
     created_at: str
@@ -136,6 +137,7 @@ class ConversationStore:
         messages = [Message(**m) for m in data["messages"]]
         return Conversation(
             conversation_id=data["conversation_id"],
+            title=data.get("title", data["conversation_id"]),
             model=data["model"],
             system_prompt=data.get("system_prompt", ""),
             created_at=data["created_at"],
@@ -154,10 +156,21 @@ class ConversationStore:
         p.write_text(json.dumps(data, indent=2,
                      ensure_ascii=False), encoding="utf-8")
 
-    def create(self, cid: str, *, model: str, system_prompt: str, owner: Optional[str] = None) -> Conversation:
+    def create(
+        self,
+        cid: str,
+        *,
+        title: Optional[str] = None,
+        model: str,
+        system_prompt: str,
+        owner: Optional[str] = None,
+    ) -> Conversation:
         now = utc_now()
         conv = Conversation(
-            conversation_id=cid, model=model, system_prompt=system_prompt,
+            conversation_id=cid,
+            title=title or cid,
+            model=model,
+            system_prompt=system_prompt,
             created_at=now, updated_at=now, owner=owner
         )
         self.save(conv)
@@ -252,8 +265,12 @@ def main():
     if args.init or not store.exists(args.id):
         if store.exists(args.id):
             print(f"Overwriting existing conversation '{args.id}'...")
-        conv = store.create(args.id, model=args.model,
-                            system_prompt=system_prompt)
+        conv = store.create(
+            args.id,
+            title=args.id,
+            model=args.model,
+            system_prompt=system_prompt,
+        )
         print(f"Initialized conversation '{args.id}' with model={args.model}")
     else:
         conv = store.load(args.id)
