@@ -1,0 +1,18 @@
+{
+  "conversation_id": "66a2e72599c1",
+  "title": "vinod",
+  "model": "gpt-4o-mini",
+  "system_prompt": "You are a helpful assistant.",
+  "created_at": "2025-10-21T06:08:22Z",
+  "updated_at": "2025-10-21T06:08:22Z",
+  "owner": "127.0.0.1",
+  "messages": [],
+  "participants": {
+    "user": {
+      "name": "user"
+    },
+    "assistant": {
+      "name": "assistant"
+    }
+  }
+}
