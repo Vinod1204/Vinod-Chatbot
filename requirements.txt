@@ -1,6 +1,2 @@
-openai
-python-dotenv
-fastapi
-uvicorn[standard]
-vercel
-langfuse
+# Backend dependencies now live in backend/requirements.txt
+-r backend/requirements.txt

@@ -1,10 +1,10 @@
 """FastAPI server that exposes the multi-turn chatbot over HTTP.
 
 Run locally:
-    uvicorn web_server:app --reload
+    uvicorn backend.web_server:app --reload
 
 The server reuses the ConversationStore and Chatbot classes from
-`multi_turn_chatbot.py`, so CLI and web clients share the same
+`backend.multi_turn_chatbot`, so CLI and web clients share the same
 conversation history on disk.
 """
 from __future__ import annotations
@@ -18,14 +18,24 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 
-from multi_turn_chatbot import (
-    Chatbot,
-    Conversation,
-    ConversationStore,
-    Message,
-    create_openai_client,
-    utc_now,
-)
+try:  # pragma: no cover - package style import when running via `python -m`
+    from .multi_turn_chatbot import (
+        Chatbot,
+        Conversation,
+        ConversationStore,
+        Message,
+        create_openai_client,
+        utc_now,
+    )
+except ImportError:  # pragma: no cover - fallback when executed as a script
+    from multi_turn_chatbot import (  # type: ignore[no-redef]
+        Chatbot,
+        Conversation,
+        ConversationStore,
+        Message,
+        create_openai_client,
+        utc_now,
+    )
 
 try:
     # Keep environment handling consistent with the CLI script.
@@ -40,7 +50,10 @@ DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_SYSTEM_PROMPT = os.getenv(
     "DEFAULT_SYSTEM_PROMPT", "You are a helpful assistant."
 )
-CONVERSATION_ROOT = Path(os.getenv("CONVERSATION_ROOT", "./conversations"))
+DEFAULT_ROOT = Path(__file__).resolve().parent / "conversations"
+CONVERSATION_ROOT = Path(
+    os.getenv("CONVERSATION_ROOT", str(DEFAULT_ROOT))
+)
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -96,7 +109,8 @@ class ConversationCreate(BaseModel):
                        or ch in ("-", "_", "."))
         if not safe:
             raise ValueError(
-                "Conversation id must contain alphanumeric or -_. characters")
+                "Conversation id must contain alphanumeric or -_. characters"
+            )
         return safe
 
 
@@ -175,7 +189,8 @@ def _ensure_conversation(
     system_prompt: Optional[str] = None,
 ) -> Conversation:
     safe_id = "".join(
-        ch for ch in conversation_id if ch.isalnum() or ch in ("-", "_", "."))
+        ch for ch in conversation_id if ch.isalnum() or ch in ("-", "_", ".")
+    )
     if not safe_id:
         raise HTTPException(
             status_code=400, detail="conversationId is invalid")
@@ -184,7 +199,8 @@ def _ensure_conversation(
         conv = store.load(safe_id)
         if conv.owner is None or conv.owner != owner:
             raise HTTPException(
-                status_code=403, detail="Conversation belongs to another user")
+                status_code=403, detail="Conversation belongs to another user"
+            )
         changed = False
         if model and model != conv.model:
             conv.model = model
@@ -345,4 +361,5 @@ def chat_endpoint(payload: ChatRequest, request: Request) -> ChatResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("web_server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.web_server:app",
+                host="0.0.0.0", port=8000, reload=True)
