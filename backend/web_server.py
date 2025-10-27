@@ -9,14 +9,22 @@ conversation history on disk.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
+from authlib.integrations.starlette_client import OAuth, OAuthError
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from fastapi.responses import HTMLResponse
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError, PyMongoError
+from pydantic import BaseModel, EmailStr, Field, validator
+from starlette.middleware.sessions import SessionMiddleware
 
 try:  # pragma: no cover - package style import when running via `python -m`
     from .multi_turn_chatbot import (
@@ -42,8 +50,27 @@ try:
     from dotenv import load_dotenv
 
     load_dotenv()
+    project_env = Path(__file__).resolve().parent.parent / ".env"
+    if project_env.exists():
+        load_dotenv(project_env)
 except ImportError:
     pass
+
+
+logger = logging.getLogger(__name__)
+
+USER_ID_HEADER = "x-user-id"
+USERS_ENABLED = bool(os.getenv("MONGODB_URI"))
+
+try:
+    from .auth import hash_password, verify_password
+    from .db import close_client, ensure_user_indexes, get_users_collection
+except ImportError:  # pragma: no cover - allows running without Mongo dependencies
+    hash_password = None  # type: ignore[assignment]
+    verify_password = None  # type: ignore[assignment]
+    close_client = None  # type: ignore[assignment]
+    ensure_user_indexes = None  # type: ignore[assignment]
+    get_users_collection = None  # type: ignore[assignment]
 
 # Configuration -----------------------------------------------------------------
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -63,6 +90,14 @@ ALLOWED_ORIGINS = [
 ]
 TEMPERATURE = float(os.getenv("CHATBOT_TEMPERATURE", "0.7"))
 TOP_P = float(os.getenv("CHATBOT_TOP_P", "1.0"))
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URL = os.getenv("GOOGLE_REDIRECT_URL")
+OAUTH_MESSAGE_SOURCE = "vinod-chatbot-oauth"
+GOOGLE_OAUTH_ENABLED = bool(
+    USERS_ENABLED and SESSION_SECRET_KEY and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+)
 
 store = ConversationStore(CONVERSATION_ROOT)
 client = create_openai_client()
@@ -76,6 +111,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if SESSION_SECRET_KEY:
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=SESSION_SECRET_KEY,
+        max_age=3600,
+        same_site="lax",
+        https_only=os.getenv("SESSION_COOKIE_SECURE",
+                             "false").lower() == "true",
+    )
+elif GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET:
+    logger.warning("SESSION_SECRET_KEY not set; OAuth providers are disabled.")
+
+oauth: Optional[OAuth] = None
+if GOOGLE_OAUTH_ENABLED:
+    oauth = OAuth()
+    oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+elif GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    logger.warning(
+        "Google OAuth credentials found but MongoDB or session configuration is incomplete; disabling Google login.",
+    )
 
 # Pydantic models ----------------------------------------------------------------
 
@@ -143,6 +205,23 @@ class ChatResponse(BaseModel):
     conversation: ConversationDetail
 
 
+class UserCreatePayload(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    name: Optional[str] = None
+
+
+class UserLoginPayload(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserResponse(BaseModel):
+    userId: str
+    email: EmailStr
+    name: Optional[str] = None
+
+
 # Helper functions ----------------------------------------------------------------
 
 
@@ -153,6 +232,13 @@ def _client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+def _owner_id(request: Request) -> str:
+    header = request.headers.get(USER_ID_HEADER)
+    if header:
+        return header.strip()
+    return _client_ip(request)
 
 
 def _message_to_dict(msg: Message) -> Dict[str, Any]:
@@ -222,7 +308,263 @@ def _ensure_conversation(
     return conv
 
 
+def _users_collection_or_error():
+    if not USERS_ENABLED or get_users_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="User database is not configured.",
+        )
+    if hash_password is None or verify_password is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Password hashing library is not available.",
+        )
+    try:
+        collection = get_users_collection()
+    except RuntimeError as exc:  # pragma: no cover - env misconfiguration
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return collection
+
+
+def _google_login_available() -> bool:
+    return GOOGLE_OAUTH_ENABLED and oauth is not None
+
+
+def _oauth_popup_response(
+    provider: str,
+    *,
+    success: bool,
+    message: Optional[str] = None,
+    user: Optional[UserResponse] = None,
+    return_url: Optional[str] = None,
+) -> HTMLResponse:
+    payload: Dict[str, Any] = {
+        "source": OAUTH_MESSAGE_SOURCE,
+        "provider": provider,
+        "success": success,
+    }
+    if user is not None:
+        payload["user"] = user.dict()
+    if message:
+        payload["message"] = message
+    else:
+        payload["message"] = (
+            f"{provider.title()} sign-in completed." if success else f"{provider.title()} sign-in failed."
+        )
+    script_payload = json.dumps(payload)
+    status_text = escape(message or (
+        "You can close this window." if success else "Authentication failed."))
+    redirect_value = json.dumps(return_url)
+    html = f"""<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"utf-8\" />
+    <title>Authentication {'Success' if success else 'Error'}</title>
+</head>
+<body>
+<script>
+    (function() {{
+        const detail = {script_payload};
+        const target = window.opener || window.parent;
+        if (target) {{
+            try {{
+                target.postMessage(detail, "*");
+            }} catch (err) {{
+                console.warn('postMessage failed', err);
+            }}
+        }}
+        const returnUrl = {redirect_value};
+        if (returnUrl) {{
+            window.location.replace(returnUrl);
+            return;
+        }}
+        window.close();
+    }})();
+</script>
+<p>{status_text}</p>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+def _upsert_oauth_user(provider: str, profile: Dict[str, Any]) -> UserResponse:
+    email = profile.get("email")
+    if not email:
+        raise HTTPException(
+            status_code=400, detail="OAuth provider did not supply an email address.")
+    collection = _users_collection_or_error()
+    now = utc_now()
+    normalised_email = str(email).lower()
+    provider_record = {
+        "sub": profile.get("sub") or profile.get("id"),
+        "email": normalised_email,
+        "name": profile.get("name"),
+        "picture": profile.get("picture"),
+        "givenName": profile.get("given_name"),
+        "familyName": profile.get("family_name"),
+        "updatedAt": now,
+    }
+    update_query: Dict[str, Any] = {
+        "$set": {
+            "email": normalised_email,
+            "updatedAt": now,
+            f"providers.{provider}": provider_record,
+        },
+        "$setOnInsert": {
+            "createdAt": now,
+            "password": None,
+        },
+    }
+    if profile.get("name"):
+        update_query["$set"]["name"] = profile["name"]
+    document = collection.find_one_and_update(
+        {"email": normalised_email},
+        update_query,
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    if not document:
+        raise HTTPException(
+            status_code=500, detail="Could not save user account.")
+    return UserResponse(userId=str(document["_id"]), email=document["email"], name=document.get("name"))
+
+
 # Routes -------------------------------------------------------------------------
+
+
+@app.post("/api/auth/signup", response_model=UserResponse, status_code=201)
+def signup_user(payload: UserCreatePayload) -> UserResponse:
+    collection = _users_collection_or_error()
+    email = payload.email.lower()
+    now = utc_now()
+    document = {
+        "email": email,
+        "password": hash_password(payload.password),
+        "name": payload.name.strip() if payload.name else None,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    try:
+        result = collection.insert_one(document)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=409, detail="An account with that email already exists.")
+    except PyMongoError as exc:  # pragma: no cover - network/driver errors
+        logger.exception("Failed to create user", exc_info=exc)
+        raise HTTPException(
+            status_code=500, detail="Unable to create user account.") from exc
+    return UserResponse(userId=str(result.inserted_id), email=email, name=document.get("name"))
+
+
+@app.post("/api/auth/login", response_model=UserResponse)
+def login_user(payload: UserLoginPayload) -> UserResponse:
+    collection = _users_collection_or_error()
+    email = payload.email.lower()
+    user = collection.find_one({"email": email})
+    if not user or not verify_password(payload.password, user.get("password", "")):
+        raise HTTPException(
+            status_code=401, detail="Invalid email or password.")
+    collection.update_one({"_id": user["_id"]}, {
+                          "$set": {"updatedAt": utc_now()}})
+    return UserResponse(userId=str(user["_id"]), email=email, name=user.get("name"))
+
+
+@app.get("/api/auth/oauth/google/start")
+async def google_oauth_start(request: Request, returnUrl: Optional[str] = None):
+    if not _google_login_available():
+        raise HTTPException(
+            status_code=503, detail="Google login is not available.")
+    if not hasattr(request, "session"):
+        raise HTTPException(
+            status_code=503, detail="Session support is required for OAuth.")
+    if returnUrl:
+        request.session["oauth_return_url"] = returnUrl
+    redirect_uri = GOOGLE_REDIRECT_URL or str(
+        request.url_for("google_oauth_callback"))
+    # type: ignore[assignment]
+    client = oauth.create_client("google") if oauth is not None else None
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail="Google login is not available.")
+    try:
+        return await client.authorize_redirect(request, redirect_uri, prompt="select_account")
+    except OAuthError as exc:  # pragma: no cover - network/remote errors
+        logger.exception("Failed to start Google OAuth flow", exc_info=exc)
+        raise HTTPException(
+            status_code=500, detail="Unable to start Google sign-in.") from exc
+
+
+@app.get("/api/auth/oauth/google/callback")
+async def google_oauth_callback(request: Request):
+    if not _google_login_available():
+        raise HTTPException(
+            status_code=503, detail="Google login is not available.")
+    # type: ignore[assignment]
+    client = oauth.create_client("google") if oauth is not None else None
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail="Google login is not available.")
+    return_url: Optional[str] = None
+    if hasattr(request, "session"):
+        return_url = request.session.pop("oauth_return_url", None)
+    try:
+        token = await client.authorize_access_token(request)
+    except OAuthError as exc:  # pragma: no cover - remote flow errors
+        logger.warning("Google OAuth error: %s", exc)
+        message = "Google sign-in was cancelled." if exc.error == "access_denied" else "Google sign-in failed."
+        return _oauth_popup_response("google", success=False, message=message, return_url=return_url)
+    except Exception as exc:  # pragma: no cover - unexpected
+        logger.exception("Unexpected Google OAuth error", exc_info=exc)
+        return _oauth_popup_response(
+            "google",
+            success=False,
+            message="Google sign-in failed. Please try again.",
+            return_url=return_url,
+        )
+
+    try:
+        userinfo = token.get("userinfo")
+        if not userinfo:
+            userinfo = await client.parse_id_token(request, token)
+    except Exception as exc:  # pragma: no cover - verification errors
+        logger.exception(
+            "Failed to parse Google user information", exc_info=exc)
+        return _oauth_popup_response(
+            "google",
+            success=False,
+            message="We could not verify your Google account details.",
+            return_url=return_url,
+        )
+
+    if not isinstance(userinfo, dict) or "email" not in userinfo:
+        return _oauth_popup_response(
+            "google",
+            success=False,
+            message="Google did not return an email address for your account.",
+            return_url=return_url,
+        )
+
+    try:
+        user_response = _upsert_oauth_user("google", userinfo)
+    except HTTPException as exc:
+        return _oauth_popup_response("google", success=False, message=str(exc.detail), return_url=return_url)
+    except PyMongoError as exc:  # pragma: no cover - database errors
+        logger.exception("Failed to persist Google account", exc_info=exc)
+        return _oauth_popup_response(
+            "google",
+            success=False,
+            message="Could not save your Google account.",
+            return_url=return_url,
+        )
+
+    logger.info("Google sign-in succeeded for %s", user_response.email)
+    return _oauth_popup_response(
+        "google",
+        success=True,
+        message="Signed in with Google.",
+        user=user_response,
+        return_url=return_url,
+    )
 
 
 @app.get("/health")
@@ -232,7 +574,7 @@ def healthcheck() -> Dict[str, Any]:
 
 @app.get("/api/conversations", response_model=List[ConversationSummary])
 def list_conversations(request: Request) -> List[ConversationSummary]:
-    owner = _client_ip(request)
+    owner = _owner_id(request)
     summaries: List[ConversationSummary] = []
     for cid in store.list_conversations():
         conv = store.load(cid)
@@ -254,7 +596,7 @@ def list_conversations(request: Request) -> List[ConversationSummary]:
 
 @app.post("/api/conversations", response_model=ConversationDetail, status_code=201)
 def create_conversation(payload: ConversationCreate, request: Request) -> ConversationDetail:
-    owner = _client_ip(request)
+    owner = _owner_id(request)
     conversation_id = payload.conversationId or uuid4().hex[:12]
     if store.exists(conversation_id):
         existing = store.load(conversation_id)
@@ -279,7 +621,7 @@ def create_conversation(payload: ConversationCreate, request: Request) -> Conver
 
 @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
 def get_conversation(conversation_id: str, request: Request) -> ConversationDetail:
-    owner = _client_ip(request)
+    owner = _owner_id(request)
     if not store.exists(conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     conv = store.load(conversation_id)
@@ -294,7 +636,7 @@ def get_conversation(conversation_id: str, request: Request) -> ConversationDeta
     response_class=Response,
 )
 def delete_conversation(conversation_id: str, request: Request) -> Response:
-    owner = _client_ip(request)
+    owner = _owner_id(request)
     if not store.exists(conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     conv = store.load(conversation_id)
@@ -306,7 +648,7 @@ def delete_conversation(conversation_id: str, request: Request) -> Response:
 
 @app.post("/api/conversations/{conversation_id}/messages", response_model=ChatResponse)
 def send_message(conversation_id: str, payload: MessagePayload, request: Request) -> ChatResponse:
-    owner = _client_ip(request)
+    owner = _owner_id(request)
     conv = _ensure_conversation(
         conversation_id,
         owner=owner,
@@ -332,7 +674,7 @@ def send_message(conversation_id: str, payload: MessagePayload, request: Request
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat_endpoint(payload: ChatRequest, request: Request) -> ChatResponse:
-    owner = _client_ip(request)
+    owner = _owner_id(request)
     conv = _ensure_conversation(
         payload.conversationId,
         owner=owner,
@@ -356,6 +698,31 @@ def chat_endpoint(payload: ChatRequest, request: Request) -> ChatResponse:
         usage=assistant_msg.usage,
         conversation=ConversationDetail(**_conversation_to_dict(updated)),
     )
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    if not USERS_ENABLED or ensure_user_indexes is None:
+        logger.info("MongoDB integration disabled or unavailable.")
+        return
+    try:
+        ensure_user_indexes()
+        logger.info("MongoDB indexes ready.")
+    except Exception as exc:  # pragma: no cover - connectivity failures
+        logger.exception("Failed to ensure MongoDB indexes", exc_info=exc)
+        return
+
+    if GOOGLE_OAUTH_ENABLED:
+        logger.info("Google OAuth sign-in is enabled.")
+    elif GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+        logger.warning(
+            "Google OAuth credentials detected but the feature is disabled due to missing prerequisites.")
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    if USERS_ENABLED and close_client is not None:
+        close_client()
 
 
 if __name__ == "__main__":

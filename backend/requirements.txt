@@ -4,3 +4,7 @@ fastapi
 uvicorn[standard]
 vercel
 langfuse
+pymongo[srv]
+passlib
+email-validator
+authlib

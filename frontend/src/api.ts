@@ -3,20 +3,55 @@ import type {
     ConversationDetail,
     ConversationSummary,
     CreateConversationPayload,
+    StoredUser,
 } from "./types";
+import { loadStoredUser } from "./auth";
+import { API_ROOT } from "./config";
+const USER_ID_HEADER = "x-user-id";
 
-const API_ROOT = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const supportsHeaders = (): boolean => typeof Headers !== "undefined";
+
+const toHeaderRecord = (input?: HeadersInit): Record<string, string> => {
+    if (!input) {
+        return {};
+    }
+    if (supportsHeaders() && input instanceof Headers) {
+        const record: Record<string, string> = {};
+        input.forEach((value, key) => {
+            record[key] = value;
+        });
+        return record;
+    }
+    if (Array.isArray(input)) {
+        const record: Record<string, string> = {};
+        for (const [key, value] of input) {
+            record[key] = value;
+        }
+        return record;
+    }
+    return { ...(input as Record<string, string>) };
+};
+
+const authHeaders = (): Record<string, string> => {
+    const user = loadStoredUser();
+    if (!user?.userId) {
+        return {};
+    }
+    return { [USER_ID_HEADER]: user.userId };
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const url = `${API_ROOT}${path}`;
     let response: Response;
     try {
+        const mergedHeaders = {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+            ...toHeaderRecord(init?.headers),
+        };
         response = await fetch(url, {
-            headers: {
-                "Content-Type": "application/json",
-                ...(init?.headers ?? {}),
-            },
             ...init,
+            headers: mergedHeaders,
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -78,5 +113,23 @@ export async function sendMessage(
     return request<ChatResponse>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: "POST",
         body: JSON.stringify({ content, ...extra }),
+    });
+}
+
+export async function signupUser(payload: {
+    email: string;
+    password: string;
+    name?: string | null;
+}): Promise<StoredUser> {
+    return request<StoredUser>("/api/auth/signup", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function loginUser(payload: { email: string; password: string }): Promise<StoredUser> {
+    return request<StoredUser>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(payload),
     });
 }

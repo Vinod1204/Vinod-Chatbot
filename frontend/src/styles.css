@@ -87,6 +87,52 @@ body {
     padding: 0;
 }
 
+.app-page {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px 0;
+}
+
+.auth-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 8px 18px;
+    background: transparent;
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.auth-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.auth-identity {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.9rem;
+}
+
+.auth-trigger:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(99, 102, 241, 0.18);
+}
+
 .app-shell {
     flex: 1 1 auto;
     width: 100%;
@@ -105,6 +151,10 @@ body {
 @media (max-width: 1024px) {
     .app-shell {
         padding: 16px;
+    }
+
+    .top-bar {
+        padding: 16px 16px 0;
     }
 }
 
@@ -853,6 +903,161 @@ body {
 .modal-card h2 {
     margin: 0;
     font-size: 1.3rem;
+}
+
+.auth-card {
+    position: relative;
+    padding-top: 48px;
+}
+
+.auth-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+}
+
+.auth-header {
+    display: grid;
+    gap: 8px;
+}
+
+.auth-mode-toggle {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.link-button:hover {
+    color: var(--accent-strong);
+}
+
+.auth-provider-list {
+    display: grid;
+    gap: 10px;
+}
+
+.auth-provider-button {
+    width: 100%;
+    border: 1px solid var(--border-soft);
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 14px;
+    padding: 10px 14px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-start;
+}
+
+.auth-provider-button:hover {
+    background: rgba(99, 102, 241, 0.16);
+    transform: translateY(-1px);
+}
+
+.auth-provider-button[disabled] {
+    cursor: not-allowed;
+    opacity: 0.7;
+    transform: none;
+}
+
+.auth-provider-button[disabled]:hover {
+    background: rgba(99, 102, 241, 0.08);
+    transform: none;
+}
+
+[data-theme="dark"] .auth-provider-button {
+    background: rgba(148, 163, 184, 0.18);
+}
+
+[data-theme="dark"] .auth-provider-button:hover {
+    background: rgba(148, 163, 184, 0.28);
+}
+
+[data-theme="dark"] .auth-provider-button[disabled]:hover {
+    background: rgba(148, 163, 184, 0.18);
+}
+
+.provider-icon {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.provider-label {
+    flex: 1 1 auto;
+    text-align: left;
+}
+
+.provider-note {
+    margin-left: auto;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.provider-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.brand-google,
+.brand-microsoft {
+    border-radius: 4px;
+}
+
+.auth-divider {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border-soft);
+}
+
+.auth-form {
+    display: grid;
+    gap: 12px;
+}
+
+.auth-submit {
+    border: none;
+    border-radius: 14px;
+    padding: 10px 16px;
+    font-weight: 600;
+    background: var(--user-bg);
+    color: #fff;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.auth-submit:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 28px rgba(99, 102, 241, 0.28);
 }
 
 .modal-actions {

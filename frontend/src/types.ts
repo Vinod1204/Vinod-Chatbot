@@ -36,3 +36,9 @@ export type CreateConversationPayload = {
     systemPrompt?: string;
     overwrite?: boolean;
 };
+
+export type StoredUser = {
+    userId: string;
+    email: string;
+    name?: string | null;
+};

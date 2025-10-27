@@ -1,0 +1,18 @@
+{
+  "conversation_id": "f17e387bfb28",
+  "title": "vin",
+  "model": "gpt-4o-mini",
+  "system_prompt": "You are a helpful assistant.",
+  "created_at": "2025-10-27T15:31:02Z",
+  "updated_at": "2025-10-27T15:31:02Z",
+  "owner": "127.0.0.1",
+  "messages": [],
+  "participants": {
+    "user": {
+      "name": "user"
+    },
+    "assistant": {
+      "name": "assistant"
+    }
+  }
+}

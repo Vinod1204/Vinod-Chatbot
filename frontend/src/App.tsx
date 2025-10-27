@@ -23,17 +23,24 @@ import {
     deleteConversation,
     getConversation,
     listConversations,
+    loginUser,
+    signupUser,
 } from "./api";
 import type {
     ConversationDetail,
     ConversationSummary,
     CreateConversationPayload,
+    StoredUser,
 } from "./types";
+import { loadStoredUser, saveStoredUser, clearStoredUser } from "./auth";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { MessageBubble } from "./components/MessageBubble";
 import { CreateConversationDialog } from "./components/CreateConversationDialog";
 import { CalculatorPanel } from "./components/CalculatorPanel";
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+import { AuthDialog } from "./components/AuthDialog";
+import { API_ROOT } from "./config";
+const API_BASE = API_ROOT;
+const USER_ID_HEADER = "x-user-id";
 const FEMALE_VOICE_HINTS = [
     "female",
     "zira",
@@ -144,6 +151,10 @@ export default function App() {
     const [isUtilitiesOpen, setIsUtilitiesOpen] = useState(false);
     const [isVoiceSearchSupported, setIsVoiceSearchSupported] = useState(false);
     const [isVoiceSearching, setIsVoiceSearching] = useState(false);
+    const [showAuthDialog, setShowAuthDialog] = useState(false);
+    const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
+    const [authBusy, setAuthBusy] = useState(false);
+    const [authError, setAuthError] = useState<string | null>(null);
     const [theme, setTheme] = useState<"light" | "dark">(() => {
         if (typeof window === "undefined") {
             return "light";
@@ -172,7 +183,21 @@ export default function App() {
     const { messages, append, isLoading, setMessages, input, handleInputChange, setInput } = useChat({
         api: `${API_BASE}/api/chat`,
         sendExtraMessageFields: true,
+        headers: () => (currentUser?.userId ? { [USER_ID_HEADER]: currentUser.userId } : {}),
     });
+
+    useEffect(() => {
+        const stored = loadStoredUser();
+        if (stored) {
+            setCurrentUser(stored);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (showAuthDialog) {
+            setAuthError(null);
+        }
+    }, [showAuthDialog]);
 
     const normaliseTitle = useCallback((value: string): string => {
         const normalized = value
@@ -337,7 +362,7 @@ export default function App() {
             const message = error instanceof Error ? error.message : String(error);
             setToast({ type: "error", message });
         }
-    }, [activeConversationId, handleSelectConversation, hasAutoPromptedCreate]);
+    }, [activeConversationId, handleSelectConversation, hasAutoPromptedCreate, currentUser?.userId]);
 
     useEffect(() => {
         void refreshConversations();
@@ -390,6 +415,114 @@ export default function App() {
         },
         [activeConversationId, setMessages],
     );
+
+    const applyAuthenticatedUser = useCallback(
+        async (user: StoredUser, successMessage: string) => {
+            saveStoredUser(user);
+            setCurrentUser(user);
+            setActiveConversationId(null);
+            setCurrentConversation(null);
+            setMessages([]);
+            setHasAutoPromptedCreate(false);
+            setShowAuthDialog(false);
+            setToast({ type: "success", message: successMessage });
+            await refreshConversations();
+        },
+        [refreshConversations, setMessages],
+    );
+
+    const handleAuthentication = useCallback(
+        async ({
+            mode,
+            email,
+            password,
+            name,
+        }: {
+            mode: "login" | "signup";
+            email: string;
+            password: string;
+            name?: string | null;
+        }) => {
+            setAuthBusy(true);
+            setAuthError(null);
+            try {
+                const normalisedEmail = email.trim().toLowerCase();
+                const trimmedName = name?.trim() || null;
+                const user =
+                    mode === "signup"
+                        ? await signupUser({ email: normalisedEmail, password, name: trimmedName })
+                        : await loginUser({ email: normalisedEmail, password });
+                const resolvedUser: StoredUser = {
+                    userId: user.userId,
+                    email: user.email,
+                    name: user.name ?? trimmedName,
+                };
+                await applyAuthenticatedUser(
+                    resolvedUser,
+                    mode === "signup" ? "Account created." : "Signed in successfully.",
+                );
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setAuthError(message);
+                throw error;
+            } finally {
+                setAuthBusy(false);
+            }
+        },
+        [applyAuthenticatedUser],
+    );
+
+    const handleProviderAuthenticated = useCallback(
+        async (
+            provider: "google" | "microsoft" | "apple" | "phone",
+            user: StoredUser,
+        ) => {
+            if (provider !== "google") {
+                setAuthError("That sign-in option is not available yet.");
+                return;
+            }
+            try {
+                await applyAuthenticatedUser(user, "Signed in with Google.");
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setAuthError(message);
+            } finally {
+                setAuthBusy(false);
+            }
+        },
+        [applyAuthenticatedUser],
+    );
+
+    const handleLogout = useCallback(async () => {
+        clearStoredUser();
+        setCurrentUser(null);
+        setShowAuthDialog(false);
+        setAuthError(null);
+        setActiveConversationId(null);
+        setCurrentConversation(null);
+        setMessages([]);
+        setHasAutoPromptedCreate(false);
+        await refreshConversations();
+        setToast({ type: "success", message: "Signed out." });
+    }, [refreshConversations, setMessages]);
+
+    const handleCloseAuthDialog = useCallback(() => {
+        if (authBusy) {
+            return;
+        }
+        setShowAuthDialog(false);
+        setAuthError(null);
+    }, [authBusy]);
+
+    const handleStayLoggedOutChoice = useCallback(() => {
+        if (authBusy) {
+            return;
+        }
+        clearStoredUser();
+        setCurrentUser(null);
+        setShowAuthDialog(false);
+        setAuthError(null);
+    }, [authBusy]);
 
     const handleShareConversation = useCallback(
         async (conversationId: string) => {
@@ -813,7 +946,38 @@ export default function App() {
     const isAnythingSpeaking = isNarratingConversation || speakingMessageId !== null;
 
     return (
-        <>
+        <div className="app-page">
+            <header className="top-bar">
+                {currentUser ? (
+                    <div className="auth-status">
+                        <span className="auth-identity" aria-live="polite">
+                            {currentUser.name ? `${currentUser.name} · ${currentUser.email}` : currentUser.email}
+                        </span>
+                        <button
+                            type="button"
+                            className="auth-trigger"
+                            onClick={() => {
+                                void handleLogout();
+                            }}
+                        >
+                            Log out
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        type="button"
+                        className="auth-trigger"
+                        onClick={() => {
+                            setAuthError(null);
+                            setShowAuthDialog(true);
+                        }}
+                        aria-haspopup="dialog"
+                        aria-expanded={showAuthDialog}
+                    >
+                        Log in
+                    </button>
+                )}
+            </header>
             <div className="app-shell" ref={shellRef}>
                 <div
                     className={clsx("sidebar-container", { collapsed: !isSidebarOpen })}
@@ -1072,6 +1236,15 @@ export default function App() {
                 isSubmitting={createBusy}
                 error={createError}
             />
-        </>
+            <AuthDialog
+                open={showAuthDialog}
+                onClose={handleCloseAuthDialog}
+                onAuthenticate={handleAuthentication}
+                isSubmitting={authBusy}
+                error={authError}
+                onStayLoggedOut={handleStayLoggedOutChoice}
+                onProviderAuthenticated={handleProviderAuthenticated}
+            />
+        </div>
     );
 }
