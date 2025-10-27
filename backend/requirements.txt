@@ -8,3 +8,4 @@ pymongo[srv]
 passlib
 email-validator
 authlib
+itsdangerous
