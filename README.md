@@ -25,10 +25,17 @@ Define the following environment variables before running locally or deploying:
 | Backend    | `ALLOWED_ORIGINS`     | Comma-separated list of origins allowed to call the API (include the deployed frontend URL). |
 | Backend    | `CONVERSATION_ROOT`   | Directory for persisted conversations (defaults to `backend/conversations/`). |
 | Backend    | `CHATBOT_TEMPERATURE` | Optional override for the assistant’s sampling temperature. |
+| Backend    | `MONGODB_URI`         | Connection string for the users collection; required for signup/login. |
+| Backend    | `MONGODB_DB_NAME`     | Optional MongoDB database name (defaults to `vinod_chatbot`). |
+| Backend    | `SESSION_SECRET_KEY`  | Secret for the session middleware; required when enabling OAuth providers. |
+| Backend    | `GOOGLE_CLIENT_ID`    | Google OAuth client ID used by the backend. |
+| Backend    | `GOOGLE_CLIENT_SECRET`| Google OAuth client secret used by the backend. |
+| Backend    | `GOOGLE_REDIRECT_URL` | Optional override for the Google callback URL; defaults to the backend callback route. |
 | Backend    | `LANGFUSE_PUBLIC_KEY` | Optional: enable Langfuse tracing when paired with `LANGFUSE_SECRET_KEY`. |
 | Backend    | `LANGFUSE_SECRET_KEY` | Optional: secret token for Langfuse. |
 | Backend    | `LANGFUSE_HOST`       | Optional: override Langfuse host (defaults to `https://cloud.langfuse.com`). |
 | Frontend   | `VITE_API_URL`        | Points the Vite app to the FastAPI backend. Required in production. |
+| Frontend   | `VITE_GOOGLE_CLIENT_ID`| Google OAuth client ID embedded in the React app. |
 | Frontend   | `VITE_DEFAULT_MODEL`  | Optional default OpenAI model identifier for new conversations. |
 
 When hosting the frontend on Vercel, add `VITE_API_URL` (and other variables) in the Vercel dashboard under **Project Settings → Environment Variables** so deployments use the correct backend endpoint.
@@ -67,6 +74,13 @@ The command creates `data/chatbot.db` with two baseline tables you can extend as
 The Vite dev server runs on `http://localhost:5173` and proxies requests directly to the FastAPI backend (ensure the backend is running on port 8000).
 
 Update `VITE_API_URL` or `VITE_DEFAULT_MODEL` in a `frontend/.env` if you need to point to a different backend or default model.
+
+### Google OAuth setup
+
+1. Create an **OAuth client ID → Web application** in Google Cloud Console. Add your development callback (`http://localhost:8000/api/auth/oauth/google/callback`) and any deployed backend callback (for example `https://<render-service>.onrender.com/api/auth/oauth/google/callback`) under *Authorized redirect URIs*.
+2. Copy the client ID and secret into the backend environment as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. If the deployed callback differs from what FastAPI would compute, set `GOOGLE_REDIRECT_URL` to the exact URL you whitelisted.
+3. Provide the same client ID to the frontend via `VITE_GOOGLE_CLIENT_ID`. Redeploy the frontend after changing the value so the build embeds the updated ID.
+4. Restart the backend. On startup you should see `Google OAuth sign-in is enabled.` in the logs. During the login flow the backend logs `Google OAuth start: redirect_uri=...`, which must match an entry in Google Cloud Console; update either the env var or the console entry until they are identical to avoid `redirect_uri_mismatch` errors.
 
 ## Deploying the frontend on Vercel
 

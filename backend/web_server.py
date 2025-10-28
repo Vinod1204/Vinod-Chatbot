@@ -15,6 +15,7 @@ import os
 from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -105,7 +106,11 @@ OAUTH_MESSAGE_SOURCE = "vinod-chatbot-oauth"
 GOOGLE_OAUTH_ENABLED = bool(
     USERS_ENABLED and SESSION_SECRET_KEY and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
 )
-
+TRUSTED_PROXY_IPS = {
+    ip.strip()
+    for ip in os.getenv("TRUSTED_PROXY_IPS", "").split(",")
+    if ip.strip()
+}
 store = ConversationStore(CONVERSATION_ROOT)
 client = create_openai_client()
 bot = Chatbot(client, store, temperature=TEMPERATURE, top_p=TOP_P)
@@ -145,6 +150,36 @@ elif GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
     logger.warning(
         "Google OAuth credentials found but MongoDB or session configuration is incomplete; disabling Google login.",
     )
+# Helpers ----------------------------------------------------------------------
+
+
+def _build_google_redirect_uri(request: Request) -> str:
+    if GOOGLE_REDIRECT_URL:
+        return GOOGLE_REDIRECT_URL
+    redirect_uri = str(request.url_for("google_oauth_callback"))
+    if not TRUSTED_PROXY_IPS:
+        return redirect_uri
+    client_host = request.client.host if request.client else None
+    if client_host not in TRUSTED_PROXY_IPS:
+        return redirect_uri
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    forwarded_port = request.headers.get("x-forwarded-port")
+    if not (forwarded_proto or forwarded_host or forwarded_port):
+        return redirect_uri
+    parts = urlsplit(redirect_uri)
+    scheme = forwarded_proto.split(
+        ",")[0].strip() if forwarded_proto else parts.scheme
+    host = forwarded_host.split(",")[0].strip(
+    ) if forwarded_host else parts.hostname or ""
+    port = forwarded_port.split(",")[0].strip() if forwarded_port else ""
+    if not host:
+        host = parts.hostname or ""
+    if port and host and ":" not in host:
+        if not ((scheme == "http" and port == "80") or (scheme == "https" and port == "443")):
+            host = f"{host}:{port}"
+    netloc = host or parts.netloc
+    return urlunsplit((scheme or parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 # Pydantic models ----------------------------------------------------------------
 
@@ -486,8 +521,7 @@ async def google_oauth_start(request: Request, returnUrl: Optional[str] = None):
             status_code=503, detail="Session support is required for OAuth.")
     if returnUrl:
         request.session["oauth_return_url"] = returnUrl
-    redirect_uri = GOOGLE_REDIRECT_URL or str(
-        request.url_for("google_oauth_callback"))
+    redirect_uri = _build_google_redirect_uri(request)
     logger.info(
         "Google OAuth start: redirect_uri=%s returnUrl=%s", redirect_uri, returnUrl
     )
