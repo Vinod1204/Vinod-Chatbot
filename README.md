@@ -118,7 +118,7 @@ Render provides an HTTPS-enabled free tier that auto-deploys from GitHub and is 
 
 - [ ] Backend deployed and responding at `/health` over HTTPS.
 - [ ] `ALLOWED_ORIGINS` includes the exact production frontend origin.
-- [ ] `VITE_API_URL` set for each Vercel environment (Preview, Production) that should call the deployment.
+- [x] `VITE_API_URL` set for each Vercel environment (Preview, Production) that should call the deployment.
 - [ ] Frontend redeployed after environment variables change so the build embeds the updated API URL.
 
 ## Project structure

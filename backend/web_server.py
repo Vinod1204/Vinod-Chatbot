@@ -66,11 +66,18 @@ try:
     from .auth import hash_password, verify_password
     from .db import close_client, ensure_user_indexes, get_users_collection
 except ImportError:  # pragma: no cover - allows running without Mongo dependencies
-    hash_password = None  # type: ignore[assignment]
-    verify_password = None  # type: ignore[assignment]
-    close_client = None  # type: ignore[assignment]
-    ensure_user_indexes = None  # type: ignore[assignment]
-    get_users_collection = None  # type: ignore[assignment]
+    # Support execution when imported as a top-level module (e.g. `uvicorn web_server:app`).
+    try:
+        # type: ignore[no-redef]
+        from auth import hash_password, verify_password
+        # type: ignore[no-redef]
+        from db import close_client, ensure_user_indexes, get_users_collection
+    except ImportError:
+        hash_password = None  # type: ignore[assignment]
+        verify_password = None  # type: ignore[assignment]
+        close_client = None  # type: ignore[assignment]
+        ensure_user_indexes = None  # type: ignore[assignment]
+        get_users_collection = None  # type: ignore[assignment]
 
 # Configuration -----------------------------------------------------------------
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -481,6 +488,9 @@ async def google_oauth_start(request: Request, returnUrl: Optional[str] = None):
         request.session["oauth_return_url"] = returnUrl
     redirect_uri = GOOGLE_REDIRECT_URL or str(
         request.url_for("google_oauth_callback"))
+    logger.info(
+        "Google OAuth start: redirect_uri=%s returnUrl=%s", redirect_uri, returnUrl
+    )
     # type: ignore[assignment]
     client = oauth.create_client("google") if oauth is not None else None
     if client is None:
