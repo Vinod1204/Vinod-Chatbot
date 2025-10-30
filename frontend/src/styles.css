@@ -558,10 +558,10 @@ body {
     background: var(--card-bg);
     border-radius: 24px;
     border: 1px solid var(--border-soft);
-    padding: 24px;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 0;
     position: relative;
     overflow: hidden;
     flex: 1 1 0;
@@ -803,14 +803,50 @@ body {
     gap: 8px;
 }
 
+.chat-header-shell {
+    padding: 24px 24px 16px;
+}
+
 .message-scroll {
     flex: 1 1 auto;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding-right: 4px;
+    padding: 0 24px 24px;
     min-height: 0;
+    width: 100%;
+    align-self: stretch;
+}
+
+.scroll-to-latest {
+    position: sticky;
+    bottom: 24px;
+    align-self: flex-end;
+    margin-right: 12px;
+    width: 46px;
+    height: 46px;
+    border: none;
+    border-radius: 50%;
+    background: var(--user-bg);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.18);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    z-index: 5;
+}
+
+.scroll-to-latest:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 18px 32px rgba(15, 23, 42, 0.22);
+}
+
+.scroll-to-latest:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .message-wrapper {
@@ -933,48 +969,69 @@ body {
     display: grid;
     gap: 12px;
     border-top: 1px solid rgba(99, 102, 241, 0.16);
-    padding: 16px 16px 0;
-    margin: 16px -16px 0;
+    padding: 16px 24px 24px;
+    margin: 0;
     background: linear-gradient(0deg, rgba(99, 102, 241, 0.1), transparent);
-    --composer-control-height: 56px;
+    --composer-min-height: 56px;
+    --composer-max-height: 240px;
+    --composer-action-height: 44px;
 }
 
 .chat-composer form {
     display: flex;
-    gap: 10px;
-    align-items: stretch;
+    flex-direction: column;
+    gap: 0;
 }
 
 .composer-input {
     display: flex;
-    align-items: stretch;
-    gap: 8px;
+    align-items: flex-end;
+    gap: 6px;
     flex: 1 1 auto;
+    border: 1px solid var(--input-border);
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 6px 6px 6px 14px;
+    transition: border 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
 .chat-composer textarea {
     flex: 1 1 auto;
-    border-radius: 20px;
-    border: 1px solid var(--input-border);
-    padding: 12px 16px;
+    border-radius: 18px;
+    border: none;
+    padding: 12px 0;
     resize: none;
-    min-height: var(--composer-control-height);
-    height: var(--composer-control-height);
-    max-height: 180px;
+    min-height: var(--composer-min-height);
+    height: auto;
+    max-height: var(--composer-max-height);
     font: inherit;
-    transition: border 0.2s ease, box-shadow 0.2s ease;
-    background: rgba(255, 255, 255, 0.9);
+    transition: color 0.2s ease;
+    background: transparent;
     color: var(--text-primary);
+    overflow: hidden;
 }
 
 [data-theme="dark"] .chat-composer textarea {
-    background: rgba(15, 23, 42, 0.8);
+    background: transparent;
 }
 
 .chat-composer textarea:focus {
     outline: none;
+}
+
+.composer-input:focus-within {
     border-color: var(--accent);
     box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.composer-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: var(--composer-action-height);
+    min-width: var(--composer-action-height);
+    flex: 0 0 auto;
 }
 
 .send-button {
@@ -982,13 +1039,13 @@ body {
     border: none;
     background: var(--user-bg);
     color: #fff;
-    padding: 0 20px;
-    height: var(--composer-control-height);
+    padding: 0 18px;
+    height: var(--composer-action-height);
     display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
 }
 
 .send-button svg {
@@ -1001,6 +1058,14 @@ body {
     cursor: not-allowed;
     box-shadow: none;
     transform: none;
+}
+
+[data-theme="dark"] .composer-input {
+    background: rgba(15, 23, 42, 0.8);
+}
+
+[data-theme="dark"] .composer-input:focus-within {
+    background: rgba(79, 70, 229, 0.16);
 }
 
 .send-button:not(:disabled):hover {
@@ -1035,11 +1100,11 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: var(--composer-control-height);
-    width: var(--composer-control-height);
+    height: var(--composer-action-height);
+    width: var(--composer-action-height);
     padding: 0;
     background: var(--icon-button-bg);
-    border-radius: 18px;
+    border-radius: 999px;
 }
 
 .voice-search-button.active {

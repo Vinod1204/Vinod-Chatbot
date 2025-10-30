@@ -1,0 +1,55 @@
+{
+  "conversation_id": "131b410a71d1",
+  "title": "Convogpt Convocraft",
+  "model": "gpt-4o-mini",
+  "system_prompt": "You are a helpful assistant.",
+  "created_at": "2025-10-30T20:57:32Z",
+  "updated_at": "2025-10-30T20:58:02Z",
+  "owner": "45f94d66744545cd8b9e4113498a9065",
+  "messages": [
+    {
+      "role": "user",
+      "content": "convoGPT and convocraft merge these two name s provide me one name for chatbot title",
+      "timestamp": "2025-10-30T20:57:32Z",
+      "metadata": {},
+      "usage": null
+    },
+    {
+      "role": "assistant",
+      "content": "How about \"ConvoCraft\"? This name combines elements from both \"convoGPT\" and \"convocraft\" while maintaining a clear connection to conversation and creativity.",
+      "timestamp": "2025-10-30T20:57:35Z",
+      "metadata": {},
+      "usage": {
+        "completion_tokens": 34,
+        "prompt_tokens": 35,
+        "total_tokens": 69
+      }
+    },
+    {
+      "role": "user",
+      "content": "provide me single name",
+      "timestamp": "2025-10-30T20:58:00Z",
+      "metadata": {},
+      "usage": null
+    },
+    {
+      "role": "assistant",
+      "content": "Sure! How about \"Convocraft\"?",
+      "timestamp": "2025-10-30T20:58:02Z",
+      "metadata": {},
+      "usage": {
+        "completion_tokens": 9,
+        "prompt_tokens": 81,
+        "total_tokens": 90
+      }
+    }
+  ],
+  "participants": {
+    "user": {
+      "name": "user"
+    },
+    "assistant": {
+      "name": "assistant"
+    }
+  }
+}

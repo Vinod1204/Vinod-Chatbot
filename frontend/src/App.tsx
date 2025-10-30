@@ -1,4 +1,4 @@
-import { FormEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Message, useChat } from "ai/react";
 import {
     Calculator,
@@ -87,6 +87,9 @@ const MALE_VOICE_HINTS = [
     "henry",
 ];
 
+const COMPOSER_MIN_HEIGHT = 56;
+const COMPOSER_MAX_HEIGHT = 240;
+
 type SpeechRecognitionInstance = {
     continuous: boolean;
     interimResults: boolean;
@@ -155,6 +158,7 @@ export default function App() {
     const [guestId, setGuestId] = useState<string | null>(() =>
         typeof window === "undefined" ? null : loadGuestId(),
     );
+    const [temporaryConversationId, setTemporaryConversationId] = useState<string | null>(null);
     const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
     const [authBusy, setAuthBusy] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
@@ -190,6 +194,12 @@ export default function App() {
     const voiceRetryRef = useRef<number | null>(null);
     const authStatusRef = useRef<HTMLButtonElement | null>(null);
     const accountPanelRef = useRef<HTMLDivElement | null>(null);
+    const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const messageScrollRef = useRef<HTMLDivElement | null>(null);
+    const lastRenderedMessageIdRef = useRef<string | null>(null);
+    const [showScrollControl, setShowScrollControl] = useState(false);
+
+    const isTemporaryChat = !currentUser;
 
     const { messages, append, isLoading, setMessages, input, handleInputChange, setInput } = useChat({
         api: `${API_BASE}/api/chat`,
@@ -215,6 +225,34 @@ export default function App() {
         setToast({ type: "error", message: "Unable to start a conversation right now." });
         return false;
     }, [currentUser?.userId, guestId, setGuestId]);
+
+    const deleteTemporaryConversation = useCallback(
+        async (conversationId?: string | null, options?: { keepAlive?: boolean }) => {
+            if (currentUser || !guestId) {
+                return;
+            }
+            const targetId = conversationId ?? temporaryConversationId;
+            if (!targetId) {
+                return;
+            }
+            const url = `${API_BASE}/api/conversations/${encodeURIComponent(targetId)}`;
+            try {
+                await fetch(url, {
+                    method: "DELETE",
+                    headers: {
+                        [USER_ID_HEADER]: guestId,
+                    },
+                    keepalive: options?.keepAlive ?? false,
+                });
+            } catch (_error) {
+                /* swallow network errors during teardown */
+            }
+            if (!options?.keepAlive) {
+                setTemporaryConversationId((current) => (current === targetId ? null : current));
+            }
+        },
+        [currentUser, guestId, temporaryConversationId],
+    );
 
     const handleToggleAccountPanel = useCallback(() => {
         setIsAccountPanelOpen((prev) => !prev);
@@ -282,6 +320,41 @@ export default function App() {
             setAuthError(null);
         }
     }, [showAuthDialog]);
+
+    useEffect(() => {
+        if (currentUser) {
+            setTemporaryConversationId(null);
+            return;
+        }
+        if (currentConversation && currentConversation.conversationId !== "temporary") {
+            setTemporaryConversationId(currentConversation.conversationId);
+            return;
+        }
+        setTemporaryConversationId(null);
+    }, [currentConversation, currentUser]);
+
+    useEffect(() => {
+        if (typeof window === "undefined" || typeof document === "undefined") {
+            return;
+        }
+        if (currentUser || !temporaryConversationId) {
+            return;
+        }
+        let flushed = false;
+        const finalize = () => {
+            if (flushed) {
+                return;
+            }
+            flushed = true;
+            void deleteTemporaryConversation(temporaryConversationId, { keepAlive: true });
+        };
+        window.addEventListener("beforeunload", finalize);
+        window.addEventListener("pagehide", finalize);
+        return () => {
+            window.removeEventListener("beforeunload", finalize);
+            window.removeEventListener("pagehide", finalize);
+        };
+    }, [currentUser, temporaryConversationId, deleteTemporaryConversation]);
 
     const normaliseTitle = useCallback((value: string): string => {
         const normalized = value
@@ -607,6 +680,7 @@ export default function App() {
 
     const applyAuthenticatedUser = useCallback(
         async (user: StoredUser, successMessage: string) => {
+            await deleteTemporaryConversation();
             saveStoredUser(user);
             setCurrentUser(user);
             setActiveConversationId(null);
@@ -616,7 +690,7 @@ export default function App() {
             setToast({ type: "success", message: successMessage });
             await refreshConversations();
         },
-        [refreshConversations, setMessages],
+        [deleteTemporaryConversation, refreshConversations, setMessages],
     );
 
     const handleAuthentication = useCallback(
@@ -686,6 +760,7 @@ export default function App() {
         setActiveConversationId(null);
         setCurrentConversation(null);
         setMessages([]);
+        setTemporaryConversationId(null);
         const ensuredGuest = ensureGuestId();
         setGuestId(ensuredGuest);
         await refreshConversations();
@@ -964,57 +1039,172 @@ export default function App() {
         setIsVoiceSearching(false);
     }, []);
 
+    const resizeComposerTextarea = useCallback((node?: HTMLTextAreaElement | null) => {
+        const target = node ?? composerTextareaRef.current;
+        if (!target) {
+            return;
+        }
+        target.style.height = "auto";
+        const next = Math.max(COMPOSER_MIN_HEIGHT, Math.min(target.scrollHeight, COMPOSER_MAX_HEIGHT));
+        target.style.height = `${next}px`;
+        target.style.overflowY = target.scrollHeight > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+    }, []);
+
+    const submitMessage = useCallback(async () => {
+        if (isLoading) {
+            return;
+        }
+        const trimmed = input.trim();
+        if (!trimmed) {
+            return;
+        }
+        if (!ensureAuthenticated()) {
+            return;
+        }
+        if (isVoiceSearching) {
+            stopVoiceSearch();
+        }
+        setToast(null);
+        let targetConversationId = activeConversationId;
+        if (!targetConversationId) {
+            const detail = await startNewConversation(false);
+            if (!detail) {
+                setToast({ type: "error", message: "Could not start a conversation." });
+                return;
+            }
+            targetConversationId = detail.conversationId;
+        }
+        try {
+            await append(
+                { role: "user", content: trimmed },
+                {
+                    body: {
+                        conversationId: targetConversationId,
+                        userId: currentUser?.userId ?? guestId ?? undefined,
+                    },
+                },
+            );
+            setInput("");
+            const detail = await getConversation(targetConversationId);
+            setCurrentConversation(detail);
+            setMessages(toMessages(detail));
+            setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setToast({ type: "error", message });
+            setInput(trimmed);
+        }
+    }, [activeConversationId, append, currentUser?.userId, ensureAuthenticated, getConversation, guestId, input, isLoading, isVoiceSearching, setInput, setMessages, startNewConversation, stopVoiceSearch]);
+
     const handleSendMessage = useCallback(
         async (event: FormEvent<HTMLFormElement>) => {
             event.preventDefault();
-            const trimmed = input.trim();
-            if (!trimmed) {
-                return;
-            }
-            if (!ensureAuthenticated()) {
-                return;
-            }
-            if (isVoiceSearching) {
-                stopVoiceSearch();
-            }
-            setToast(null);
-            let targetConversationId = activeConversationId;
-            if (!targetConversationId) {
-                const detail = await startNewConversation(false);
-                if (!detail) {
-                    setToast({ type: "error", message: "Could not start a conversation." });
-                    return;
-                }
-                targetConversationId = detail.conversationId;
-            }
-            try {
-                await append(
-                    { role: "user", content: trimmed },
-                    {
-                        body: {
-                            conversationId: targetConversationId,
-                            userId: currentUser?.userId ?? guestId ?? undefined,
-                        },
-                    },
-                );
-                setInput("");
-                const detail = await getConversation(targetConversationId);
-                setCurrentConversation(detail);
-                setMessages(toMessages(detail));
-                setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
-            } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                setToast({ type: "error", message });
-                setInput(trimmed);
+            await submitMessage();
+        },
+        [submitMessage],
+    );
+
+    const handleComposerKeyDown = useCallback(
+        (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                void submitMessage();
             }
         },
-        [activeConversationId, append, currentUser?.userId, ensureAuthenticated, getConversation, guestId, input, isVoiceSearching, setInput, setMessages, startNewConversation, stopVoiceSearch],
+        [submitMessage],
     );
+
+    const handleComposerChange = useCallback(
+        (event: ChangeEvent<HTMLTextAreaElement>) => {
+            handleInputChange(event);
+            resizeComposerTextarea(event.currentTarget);
+        },
+        [handleInputChange, resizeComposerTextarea],
+    );
+
+    useLayoutEffect(() => {
+        resizeComposerTextarea();
+    }, [input, resizeComposerTextarea]);
+
+    const renderedMessages: Message[] = messages;
+
+    const handleScrollToLatest = useCallback(() => {
+        if (!messageScrollRef.current) {
+            return;
+        }
+        messageScrollRef.current.scrollTo({
+            top: messageScrollRef.current.scrollHeight,
+            behavior: "smooth",
+        });
+        setShowScrollControl(false);
+    }, []);
+
+    const headerConversationTitle = useMemo(() => {
+        if (!currentConversation) {
+            return "New Conversation";
+        }
+        const source = currentConversation.title?.trim() || currentConversation.conversationId || "";
+        const formatted = normaliseTitle(source);
+        return formatted || "New Conversation";
+    }, [currentConversation, normaliseTitle]);
+
+    useEffect(() => {
+        lastRenderedMessageIdRef.current = null;
+        if (messageScrollRef.current) {
+            messageScrollRef.current.scrollTop = 0;
+        }
+        setShowScrollControl(false);
+    }, [currentConversation?.conversationId]);
+
+    useEffect(() => {
+        const container = messageScrollRef.current;
+        if (!container) {
+            return;
+        }
+        const lastMessage = renderedMessages.length > 0 ? renderedMessages[renderedMessages.length - 1] : null;
+        if (!lastMessage) {
+            lastRenderedMessageIdRef.current = null;
+            return;
+        }
+        if (lastMessage.role === "assistant" && isLoading) {
+            return;
+        }
+        if (lastRenderedMessageIdRef.current === lastMessage.id) {
+            return;
+        }
+        const previousId = lastRenderedMessageIdRef.current;
+        lastRenderedMessageIdRef.current = lastMessage.id;
+        requestAnimationFrame(() => {
+            if (!messageScrollRef.current) {
+                return;
+            }
+            messageScrollRef.current.scrollTo({
+                top: messageScrollRef.current.scrollHeight,
+                behavior: previousId ? "smooth" : "auto",
+            });
+        });
+    }, [renderedMessages, isLoading]);
+
+    useEffect(() => {
+        const container = messageScrollRef.current;
+        if (!container || !currentConversation) {
+            setShowScrollControl(false);
+            return;
+        }
+        const updateVisibility = () => {
+            const distanceFromBottom =
+                container.scrollHeight - container.scrollTop - container.clientHeight;
+            setShowScrollControl(distanceFromBottom > 80);
+        };
+        updateVisibility();
+        container.addEventListener("scroll", updateVisibility);
+        return () => {
+            container.removeEventListener("scroll", updateVisibility);
+        };
+    }, [currentConversation, renderedMessages.length]);
 
     const statusMessage = toast?.message ?? null;
     const statusClass = toast?.type === "error" ? "danger" : undefined;
-
-    const renderedMessages: Message[] = messages;
 
     const transcript = useMemo(() => {
         if (!currentConversation) {
@@ -1319,49 +1509,43 @@ export default function App() {
                         <header className="chat-header">
                             <div className="chat-heading-wrapper">
                                 {!currentUser ? (
-                                    <div className="brand chat-brand" aria-label="ConvoGPT">
+                                    <div className="brand chat-brand" aria-label={headerConversationTitle}>
                                         <img src={brandLogo} alt="ConvoGPT logo" className="brand-logo" />
-                                        <span className="brand-name">ConvoGPT</span>
+                                        {headerConversationTitle ? (
+                                            <span className="brand-name">{headerConversationTitle}</span>
+                                        ) : null}
                                     </div>
                                 ) : null}
                                 <div className="chat-heading">
-                                    <button
-                                        type="button"
-                                        className={clsx("icon-button", "sidebar-toggle", {
-                                            active: isSidebarOpen === false,
-                                        })}
-                                        onClick={() => setIsSidebarOpen((prev) => !prev)}
-                                        aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-                                        aria-pressed={!isSidebarOpen}
-                                    >
-                                        {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-                                    </button>
-                                    <div className="chat-title">
-                                        <h1>
-                                            {currentConversation
-                                                ? normaliseTitle(currentConversation.title)
-                                                : "Start chatting"}
-                                        </h1>
-                                        {currentConversation?.systemPrompt &&
-                                            currentConversation.systemPrompt !== "You are a helpful assistant." ? (
-                                            <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
-                                        ) : null}
-                                    </div>
+                                    {!isTemporaryChat ? (
+                                        <button
+                                            type="button"
+                                            className={clsx("icon-button", "sidebar-toggle", {
+                                                active: isSidebarOpen === false,
+                                            })}
+                                            onClick={() => setIsSidebarOpen((prev) => !prev)}
+                                            aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+                                            aria-pressed={!isSidebarOpen}
+                                        >
+                                            {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+                                        </button>
+                                    ) : null}
+                                    {!isTemporaryChat ? (
+                                        <div className="chat-title">
+                                            <h1>
+                                                {currentConversation
+                                                    ? normaliseTitle(currentConversation.title)
+                                                    : "Start chatting"}
+                                            </h1>
+                                            {currentConversation?.systemPrompt &&
+                                                currentConversation.systemPrompt !== "You are a helpful assistant." ? (
+                                                <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
                                 </div>
                             </div>
                             <div className="chat-tools">
-                                {currentConversation ? (
-                                    <span className="badge">
-                                        <Sparkles size={16} />
-                                        {currentConversation.messageCount} {" "}
-                                        {currentConversation.messageCount === 1 ? "message" : "messages"}
-                                    </span>
-                                ) : (
-                                    <span className="badge">
-                                        <Sparkles size={16} />
-                                        Ready to begin
-                                    </span>
-                                )}
                                 <button
                                     type="button"
                                     className={clsx("icon-button", { active: isUtilitiesOpen })}
@@ -1389,7 +1573,7 @@ export default function App() {
                             </div>
                         </header>
                     </div>
-                    <div className="message-scroll">
+                    <div className="message-scroll" ref={messageScrollRef}>
                         {currentConversation ? (
                             renderedMessages.length === 0 ? (
                                 <div className="empty-state">
@@ -1430,6 +1614,16 @@ export default function App() {
                                 </button>
                             </div>
                         )}
+                        {showScrollControl ? (
+                            <button
+                                type="button"
+                                className="scroll-to-latest"
+                                onClick={handleScrollToLatest}
+                                aria-label="Scroll to latest message"
+                            >
+                                <ChevronDown size={18} aria-hidden="true" />
+                            </button>
+                        ) : null}
                     </div>
                     <div className="chat-composer">
                         {statusMessage ? (
@@ -1439,15 +1633,17 @@ export default function App() {
                             <div className="composer-input">
                                 <textarea
                                     value={input}
-                                    onChange={handleInputChange}
+                                    onChange={handleComposerChange}
+                                    onKeyDown={handleComposerKeyDown}
                                     placeholder="Ask a question or describe a task..."
                                     disabled={isLoading}
                                     aria-label="Message"
+                                    ref={composerTextareaRef}
                                 />
                                 {isVoiceSearchSupported ? (
                                     <button
                                         type="button"
-                                        className={clsx("icon-button", "voice-search-button", {
+                                        className={clsx("icon-button", "voice-search-button", "composer-action", {
                                             active: isVoiceSearching,
                                         })}
                                         onClick={() => {
@@ -1464,15 +1660,15 @@ export default function App() {
                                         {isVoiceSearching ? <MicOff size={18} /> : <Mic size={18} />}
                                     </button>
                                 ) : null}
+                                <button
+                                    type="submit"
+                                    className={clsx("send-button", "composer-action")}
+                                    disabled={isLoading || input.trim().length === 0}
+                                >
+                                    {isLoading ? <Loader2 size={18} className="spin" /> : <SendHorizonal size={20} />}
+                                    <span className="send-label">Send</span>
+                                </button>
                             </div>
-                            <button
-                                type="submit"
-                                className="send-button"
-                                disabled={isLoading || input.trim().length === 0}
-                            >
-                                {isLoading ? <Loader2 size={18} className="spin" /> : <SendHorizonal size={20} />}
-                                <span className="send-label">Send</span>
-                            </button>
                         </form>
                         {showCalculator ? <CalculatorPanel onClose={() => setShowCalculator(false)} /> : null}
                     </div>

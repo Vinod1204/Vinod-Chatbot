@@ -3,9 +3,9 @@
 Run locally:
     uvicorn backend.web_server:app --reload
 
-The server reuses the ConversationStore and Chatbot classes from
-`backend.multi_turn_chatbot`, so CLI and web clients share the same
-conversation history on disk.
+The server reuses the Chatbot class from ``backend.multi_turn_chatbot`` and
+persists conversation history in MongoDB, keeping web clients and background
+tasks in sync.
 """
 from __future__ import annotations
 
@@ -32,20 +32,21 @@ try:  # pragma: no cover - package style import when running via `python -m`
     from .multi_turn_chatbot import (
         Chatbot,
         Conversation,
-        ConversationStore,
         Message,
         create_openai_client,
         utc_now,
     )
+    from .conversation_store import MongoConversationStore
 except ImportError:  # pragma: no cover - fallback when executed as a script
     from multi_turn_chatbot import (  # type: ignore[no-redef]
         Chatbot,
         Conversation,
-        ConversationStore,
         Message,
         create_openai_client,
         utc_now,
     )
+    # type: ignore[no-redef]
+    from conversation_store import MongoConversationStore
 
 try:
     # Keep environment handling consistent with the CLI script.
@@ -66,14 +67,24 @@ USERS_ENABLED = bool(os.getenv("MONGODB_URI"))
 
 try:
     from .auth import hash_password, verify_password
-    from .db import close_client, ensure_user_indexes, get_users_collection
+    from .db import (
+        close_client,
+        ensure_user_indexes,
+        get_messages_collection,
+        get_users_collection,
+    )
 except ImportError:  # pragma: no cover - allows running without Mongo dependencies
     # Support execution when imported as a top-level module (e.g. `uvicorn web_server:app`).
     try:
         # type: ignore[no-redef]
         from auth import hash_password, verify_password
         # type: ignore[no-redef]
-        from db import close_client, ensure_user_indexes, get_users_collection
+        from db import (
+            close_client,
+            ensure_user_indexes,
+            get_messages_collection,
+            get_users_collection,
+        )
     except ImportError:
         hash_password = None  # type: ignore[assignment]
         verify_password = None  # type: ignore[assignment]
@@ -85,10 +96,6 @@ except ImportError:  # pragma: no cover - allows running without Mongo dependenc
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_SYSTEM_PROMPT = os.getenv(
     "DEFAULT_SYSTEM_PROMPT", "You are a helpful assistant."
-)
-DEFAULT_ROOT = Path(__file__).resolve().parent / "conversations"
-CONVERSATION_ROOT = Path(
-    os.getenv("CONVERSATION_ROOT", str(DEFAULT_ROOT))
 )
 ALLOWED_ORIGINS = [
     origin.strip()
@@ -112,7 +119,19 @@ TRUSTED_PROXY_IPS = {
     for ip in os.getenv("TRUSTED_PROXY_IPS", "").split(",")
     if ip.strip()
 }
-store = ConversationStore(CONVERSATION_ROOT)
+
+if not USERS_ENABLED:
+    raise RuntimeError(
+        "MONGODB_URI must be configured. Conversation history now relies on MongoDB storage.",
+    )
+
+try:
+    _messages_collection = get_messages_collection()
+except RuntimeError as exc:  # pragma: no cover - configuration errors
+    raise RuntimeError(
+        "Unable to initialise MongoDB conversation storage") from exc
+
+store = MongoConversationStore(_messages_collection)
 client = create_openai_client()
 bot = Chatbot(client, store, temperature=TEMPERATURE, top_p=TOP_P)
 
@@ -399,8 +418,15 @@ def _ensure_conversation(
         raise HTTPException(
             status_code=400, detail="conversationId is invalid")
 
-    if store.exists(safe_id):
+    try:
         conv = store.load(safe_id)
+    except FileNotFoundError:
+        conv = None
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not load conversation.") from exc
+
+    if conv is not None:
         if conv.owner is None or conv.owner != owner:
             raise HTTPException(
                 status_code=403, detail="Conversation belongs to another user"
@@ -413,16 +439,24 @@ def _ensure_conversation(
             conv.system_prompt = system_prompt
             changed = True
         if changed:
-            store.save(conv)
+            try:
+                store.save(conv)
+            except PyMongoError as exc:
+                raise HTTPException(
+                    status_code=500, detail="Could not update conversation.") from exc
         return conv
 
-    conv = store.create(
-        safe_id,
-        title=safe_id,
-        model=model or DEFAULT_MODEL,
-        system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
-        owner=owner,
-    )
+    try:
+        conv = store.create(
+            safe_id,
+            title=safe_id,
+            model=model or DEFAULT_MODEL,
+            system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
+            owner=owner,
+        )
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not create conversation.") from exc
     return conv
 
 
@@ -716,31 +750,38 @@ def healthcheck() -> Dict[str, Any]:
 @app.get("/api/conversations", response_model=List[ConversationSummary])
 def list_conversations(request: Request) -> List[ConversationSummary]:
     owner = _owner_id(request)
-    summaries: List[ConversationSummary] = []
-    for cid in store.list_conversations():
-        conv = store.load(cid)
-        if conv.owner != owner:
-            continue
-        summaries.append(
-            ConversationSummary(
-                conversationId=conv.conversation_id,
-                title=conv.title,
-                model=conv.model,
-                createdAt=conv.created_at,
-                updatedAt=conv.updated_at,
-                messageCount=len(conv.messages),
-            )
+    try:
+        conversations = list(store.iter_owner(owner))
+    except PyMongoError as exc:  # pragma: no cover - connectivity issues
+        raise HTTPException(
+            status_code=500, detail="Could not load conversations.") from exc
+
+    return [
+        ConversationSummary(
+            conversationId=conv.conversation_id,
+            title=conv.title,
+            model=conv.model,
+            createdAt=conv.created_at,
+            updatedAt=conv.updated_at,
+            messageCount=len(conv.messages),
         )
-    summaries.sort(key=lambda item: item.updatedAt, reverse=True)
-    return summaries
+        for conv in conversations
+    ]
 
 
 @app.post("/api/conversations", response_model=ConversationDetail, status_code=201)
 def create_conversation(payload: ConversationCreate, request: Request) -> ConversationDetail:
     owner = _owner_id(request)
     conversation_id = payload.conversationId or uuid4().hex[:12]
-    if store.exists(conversation_id):
+    try:
         existing = store.load(conversation_id)
+    except FileNotFoundError:
+        existing = None
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not inspect conversation state.") from exc
+
+    if existing is not None:
         if existing.owner != owner:
             raise HTTPException(
                 status_code=409,
@@ -750,22 +791,30 @@ def create_conversation(payload: ConversationCreate, request: Request) -> Conver
             raise HTTPException(
                 status_code=409, detail="Conversation already exists")
 
-    conv = store.create(
-        conversation_id,
-        title=payload.title,
-        model=DEFAULT_MODEL,
-        system_prompt=payload.systemPrompt or DEFAULT_SYSTEM_PROMPT,
-        owner=owner,
-    )
+    try:
+        conv = store.create(
+            conversation_id,
+            title=payload.title,
+            model=DEFAULT_MODEL,
+            system_prompt=payload.systemPrompt or DEFAULT_SYSTEM_PROMPT,
+            owner=owner,
+        )
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not create conversation.") from exc
     return ConversationDetail(**_conversation_to_dict(conv))
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
 def get_conversation(conversation_id: str, request: Request) -> ConversationDetail:
     owner = _owner_id(request)
-    if not store.exists(conversation_id):
+    try:
+        conv = store.load(conversation_id)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    conv = store.load(conversation_id)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not load conversation.") from exc
     if conv.owner != owner:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return ConversationDetail(**_conversation_to_dict(conv))
@@ -776,16 +825,24 @@ def rename_conversation(
     conversation_id: str, payload: ConversationRename, request: Request
 ) -> ConversationDetail:
     owner = _owner_id(request)
-    if not store.exists(conversation_id):
+    try:
+        conv = store.load(conversation_id)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    conv = store.load(conversation_id)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not load conversation.") from exc
     if conv.owner != owner:
         raise HTTPException(status_code=404, detail="Conversation not found")
     new_title = payload.title.strip()
     if conv.title != new_title:
         conv.title = new_title
         conv.updated_at = utc_now()
-        store.save(conv)
+        try:
+            store.save(conv)
+        except PyMongoError as exc:
+            raise HTTPException(
+                status_code=500, detail="Could not update conversation.") from exc
     return ConversationDetail(**_conversation_to_dict(conv))
 
 
@@ -796,12 +853,22 @@ def rename_conversation(
 )
 def delete_conversation(conversation_id: str, request: Request) -> Response:
     owner = _owner_id(request)
-    if not store.exists(conversation_id):
+    try:
+        conv = store.load(conversation_id)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    conv = store.load(conversation_id)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not load conversation.") from exc
     if conv.owner != owner:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    store.path(conversation_id).unlink()
+    try:
+        store.delete(conversation_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not delete conversation.") from exc
     return Response(status_code=204)
 
 
@@ -818,8 +885,17 @@ def send_message(conversation_id: str, payload: MessagePayload, request: Request
         raise HTTPException(
             status_code=400, detail="Message content is required")
 
-    reply_text = bot.send(conv.conversation_id, payload.content)
-    updated = store.load(conv.conversation_id)
+    try:
+        reply_text = bot.send(conv.conversation_id, payload.content)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not process message.") from exc
+
+    try:
+        updated = store.load(conv.conversation_id)
+    except (FileNotFoundError, PyMongoError) as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not refresh conversation state.") from exc
     assistant_msg = updated.messages[-1]
     return ChatResponse(
         id=str(uuid4()),
@@ -846,8 +922,17 @@ def chat_endpoint(payload: ChatRequest, request: Request) -> ChatResponse:
     if not user_input:
         raise HTTPException(status_code=400, detail="No user input provided")
 
-    reply_text = bot.send(conv.conversation_id, user_input)
-    updated = store.load(conv.conversation_id)
+    try:
+        reply_text = bot.send(conv.conversation_id, user_input)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not process message.") from exc
+
+    try:
+        updated = store.load(conv.conversation_id)
+    except (FileNotFoundError, PyMongoError) as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not refresh conversation state.") from exc
     assistant_msg = updated.messages[-1]
     return ChatResponse(
         id=str(uuid4()),
@@ -861,15 +946,21 @@ def chat_endpoint(payload: ChatRequest, request: Request) -> ChatResponse:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    if not USERS_ENABLED or ensure_user_indexes is None:
-        logger.info("MongoDB integration disabled or unavailable.")
+    try:
+        store.ensure_indexes()
+        logger.info("Conversation indexes ready.")
+    except Exception as exc:  # pragma: no cover - connectivity failures
+        logger.exception("Failed to ensure conversation indexes", exc_info=exc)
+
+    if ensure_user_indexes is None:
+        logger.info(
+            "User collection helper unavailable; skipping user index creation.")
         return
     try:
         ensure_user_indexes()
-        logger.info("MongoDB indexes ready.")
+        logger.info("User collection indexes ready.")
     except Exception as exc:  # pragma: no cover - connectivity failures
-        logger.exception("Failed to ensure MongoDB indexes", exc_info=exc)
-        return
+        logger.exception("Failed to ensure MongoDB user indexes", exc_info=exc)
 
     if GOOGLE_OAUTH_ENABLED:
         logger.info("Google OAuth sign-in is enabled.")

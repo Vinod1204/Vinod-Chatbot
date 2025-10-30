@@ -32,13 +32,19 @@ def close_client() -> None:
 
 
 def get_database(name: Optional[str] = None) -> Database:
-    db_name = name or os.getenv("MONGODB_DB_NAME", "vinod_chatbot")
+    db_name = name or os.getenv("MONGODB_DB_NAME", "chatbot_db")
     return get_client()[db_name]
 
 
 def get_users_collection() -> Collection:
     collection_name = os.getenv("MONGODB_USERS_COLLECTION", "users")
     return get_database()[collection_name]
+
+
+def get_messages_collection() -> Collection:
+    collection_name = os.getenv("MONGODB_MESSAGES_COLLECTION", "messages")
+    database_name = os.getenv("MONGODB_MESSAGES_DB_NAME")
+    return get_database(database_name)[collection_name]
 
 
 @lru_cache(maxsize=1)

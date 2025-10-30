@@ -4,7 +4,7 @@ A local-first multi-turn assistant that reuses the Python CLI logic, adds a Fast
 
 ## Features
 
-- Persisted conversations on disk via the existing `ConversationStore`.
+- Persisted conversations in MongoDB (`chatbot_db.messages`) linked to user accounts.
 - REST API built with FastAPI (`backend/web_server.py`) for creating, listing, deleting, and chatting.
 - Beautiful React interface (Vite + TypeScript) using the `ai/react` hooks for client-side chat orchestration.
 - Optional `.env` loading through `python-dotenv` so you can manage secrets outside source control.
@@ -23,10 +23,11 @@ Define the following environment variables before running locally or deploying:
 |------------|-----------------------|---------|
 | Backend    | `OPENAI_API_KEY`      | Required so the chatbot can call the OpenAI API. |
 | Backend    | `ALLOWED_ORIGINS`     | Comma-separated list of origins allowed to call the API (include the deployed frontend URL). |
-| Backend    | `CONVERSATION_ROOT`   | Directory for persisted conversations (defaults to `backend/conversations/`). |
 | Backend    | `CHATBOT_TEMPERATURE` | Optional override for the assistant’s sampling temperature. |
-| Backend    | `MONGODB_URI`         | Connection string for the users collection; required for signup/login. |
-| Backend    | `MONGODB_DB_NAME`     | Optional MongoDB database name (defaults to `vinod_chatbot`). |
+| Backend    | `MONGODB_URI`         | MongoDB connection string; required for both user auth and conversation storage. |
+| Backend    | `MONGODB_DB_NAME`     | Optional MongoDB database name (defaults to `chatbot_db`). |
+| Backend    | `MONGODB_MESSAGES_COLLECTION` | Optional MongoDB collection name for conversations (defaults to `messages`). |
+| Backend    | `MONGODB_USERS_COLLECTION` | Optional MongoDB collection name for users (defaults to `users`). |
 | Backend    | `SESSION_SECRET_KEY`  | Secret for the session middleware; required when enabling OAuth providers. |
 | Backend    | `GOOGLE_CLIENT_ID`    | Google OAuth client ID used by the backend. |
 | Backend    | `GOOGLE_CLIENT_SECRET`| Google OAuth client secret used by the backend. |
@@ -54,7 +55,7 @@ notepad .\.env
 uvicorn backend.web_server:app --reload
 ```
 
-The API listens on `http://localhost:8000` by default. Update `ALLOWED_ORIGINS`, `CONVERSATION_ROOT`, `CHATBOT_TEMPERATURE`, etc., via environment variables if needed. By default, conversations persist under `backend/conversations/`.
+The API listens on `http://localhost:8000` by default. Update `ALLOWED_ORIGINS`, `CHATBOT_TEMPERATURE`, etc., via environment variables if needed. By default, conversations persist in MongoDB under `chatbot_db.messages` (configurable via `MONGODB_DB_NAME` and `MONGODB_MESSAGES_COLLECTION`).
 
 ### Authentication and validation
 
@@ -69,15 +70,14 @@ The API listens on `http://localhost:8000` by default. Update `ALLOWED_ORIGINS`,
 
 If you provide `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`, the app will automatically wrap the OpenAI SDK with Langfuse’s OpenAI client. This captures spans, prompts, and responses without changing any API calls. Set `LANGFUSE_HOST` when self-hosting Langfuse. Remove or unset these variables to disable tracing.
 
-### Database (optional SQLite bootstrap)
+### Database
 
-By default the `ConversationStore` keeps JSON files inside `backend/conversations/`. If you prefer to experiment with a relational store (for analytics, dashboards, or future multi-user support), you can seed a lightweight SQLite database:
+Conversation history now lives in MongoDB. At a minimum, configure `MONGODB_URI`; the backend will use `chatbot_db` and the `messages` collection by default. On startup the API ensures two indexes:
 
-```powershell
-python -c "import sqlite3, pathlib; db = pathlib.Path('data/chatbot.db'); db.parent.mkdir(parents=True, exist_ok=True); schema = '''CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, model TEXT NOT NULL, system_prompt TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL, content TEXT NOT NULL, timestamp TEXT NOT NULL);'''; conn = sqlite3.connect(db); conn.executescript(schema); conn.close(); print(f'Initialized {db}')"
-```
+- unique `conversation_id` to prevent collisions;
+- `{ owner: 1, updated_at: -1 }` to speed up history lookups per user.
 
-The command creates `data/chatbot.db` with two baseline tables you can extend as needed. Point any experimental code or services at that path (for example, via a `DATABASE_URL=sqlite:///data/chatbot.db` environment variable) when you swap the storage layer to SQLite.
+User accounts continue to live in the same database (collection defaults to `users`). No manual schema creation is required—documents are stored as nested JSON.
 @@ -61,53 +76,82 @@ npm run dev
 
 The Vite dev server runs on `http://localhost:5173` and proxies requests directly to the FastAPI backend (ensure the backend is running on port 8000).
@@ -150,9 +150,10 @@ Render provides an HTTPS-enabled free tier that auto-deploys from GitHub and is 
 ConvoGPT/
 ├── backend/
 │   ├── __init__.py
-│   ├── conversations/              # JSON transcripts saved per conversation id
+│   ├── conversations/              # Legacy JSON transcripts (CLI usage)
 │   ├── conversation_schema.json
 │   ├── multi_turn_chatbot.py       # CLI + core chatbot implementation
+│   ├── conversation_store.py       # MongoDB conversation persistence
 │   ├── requirements.txt            # Backend Python dependencies
 │   ├── sample_transcripts/
 │   └── web_server.py               # FastAPI application
