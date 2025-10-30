@@ -1,0 +1,55 @@
+{
+  "conversation_id": "49e9ad4d1c92",
+  "title": "How Are",
+  "model": "gpt-4o-mini",
+  "system_prompt": "You are a helpful assistant.",
+  "created_at": "2025-10-30T11:11:17Z",
+  "updated_at": "2025-10-30T11:11:40Z",
+  "owner": "600940925db2482ea20a005da8148d77",
+  "messages": [
+    {
+      "role": "user",
+      "content": "how are you?",
+      "timestamp": "2025-10-30T11:11:17Z",
+      "metadata": {},
+      "usage": null
+    },
+    {
+      "role": "assistant",
+      "content": "I'm just a computer program, so I don't have feelings, but I'm here and ready to help you! How can I assist you today?",
+      "timestamp": "2025-10-30T11:11:19Z",
+      "metadata": {},
+      "usage": {
+        "completion_tokens": 28,
+        "prompt_tokens": 21,
+        "total_tokens": 49
+      }
+    },
+    {
+      "role": "user",
+      "content": "what help you will provide",
+      "timestamp": "2025-10-30T11:11:36Z",
+      "metadata": {},
+      "usage": null
+    },
+    {
+      "role": "assistant",
+      "content": "I can assist you in a variety of ways, including:\n\n1. **Answering Questions**: I can provide information on a wide range of topics, including science, history, technology, and more.\n\n2. **Homework Help**: I can help you understand concepts and solve problems in subjects like math, science, literature, and more.\n\n3. **Writing Assistance**: I can help with writing tasks, such as essays, reports, creative writing, and proofreading.\n\n4. **Learning New Skills**: I can provide resources and tips for learning new skills, whether it’s a language, coding, or a hobby.\n\n5. **General Advice**: I can offer tips on productivity, study techniques, and personal development.\n\n6. **Entertainment**: I can suggest books, movies, games, and other forms of entertainment.\n\n7. **Conversation**: I can engage in general conversation, provide insights, or discuss various topics.\n\nFeel free to ask me anything specific you need help with!",
+      "timestamp": "2025-10-30T11:11:40Z",
+      "metadata": {},
+      "usage": {
+        "completion_tokens": 201,
+        "prompt_tokens": 62,
+        "total_tokens": 263
+      }
+    }
+  ],
+  "participants": {
+    "user": {
+      "name": "user"
+    },
+    "assistant": {
+      "name": "assistant"
+    }
+  }
+}

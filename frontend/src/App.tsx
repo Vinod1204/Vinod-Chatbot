@@ -2,6 +2,7 @@ import { FormEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useMe
 import { Message, useChat } from "ai/react";
 import {
     Calculator,
+    ChevronDown,
     Mic,
     MicOff,
     Loader2,
@@ -23,24 +24,26 @@ import {
     deleteConversation,
     getConversation,
     listConversations,
+    renameConversation as renameConversationRequest,
     loginUser,
     signupUser,
 } from "./api";
 import type {
     ConversationDetail,
     ConversationSummary,
-    CreateConversationPayload,
     StoredUser,
 } from "./types";
-import { loadStoredUser, saveStoredUser, clearStoredUser } from "./auth";
+import { loadStoredUser, saveStoredUser, clearStoredUser, ensureGuestId, loadGuestId } from "./auth";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { MessageBubble } from "./components/MessageBubble";
-import { CreateConversationDialog } from "./components/CreateConversationDialog";
 import { CalculatorPanel } from "./components/CalculatorPanel";
 import { AuthDialog } from "./components/AuthDialog";
 import { API_ROOT } from "./config";
+import brandLogo from "../ConvoGPT.png";
 const API_BASE = API_ROOT;
 const USER_ID_HEADER = "x-user-id";
+const THEME_STORAGE_KEY = "convogpt-theme";
+const LEGACY_THEME_KEYS = ["vinod-chatbot-theme"] as const;
 const FEMALE_VOICE_HINTS = [
     "female",
     "zira",
@@ -137,10 +140,6 @@ export default function App() {
     const [conversations, setConversations] = useState<ConversationSummary[]>([]);
     const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
     const [currentConversation, setCurrentConversation] = useState<ConversationDetail | null>(null);
-    const [showCreateModal, setShowCreateModal] = useState(false);
-    const [hasAutoPromptedCreate, setHasAutoPromptedCreate] = useState(false);
-    const [createBusy, setCreateBusy] = useState(false);
-    const [createError, setCreateError] = useState<string | null>(null);
     const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
     const [showCalculator, setShowCalculator] = useState(false);
     const [voiceGender, setVoiceGender] = useState<"female" | "male">("female");
@@ -153,6 +152,10 @@ export default function App() {
     const [isVoiceSearching, setIsVoiceSearching] = useState(false);
     const [showAuthDialog, setShowAuthDialog] = useState(false);
     const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
+    const [guestId, setGuestId] = useState<string | null>(() =>
+        typeof window === "undefined" ? null : loadGuestId(),
+    );
+    const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
     const [authBusy, setAuthBusy] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
     const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -160,9 +163,15 @@ export default function App() {
             return "light";
         }
         try {
-            const stored = window.localStorage.getItem("vinod-chatbot-theme");
+            const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
             if (stored === "light" || stored === "dark") {
                 return stored;
+            }
+            for (const legacyKey of LEGACY_THEME_KEYS) {
+                const legacyValue = window.localStorage.getItem(legacyKey);
+                if (legacyValue === "light" || legacyValue === "dark") {
+                    return legacyValue;
+                }
             }
         } catch (_error) {
             /* ignore storage errors */
@@ -179,12 +188,43 @@ export default function App() {
     const voiceSeedRef = useRef("");
     const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
     const voiceRetryRef = useRef<number | null>(null);
+    const authStatusRef = useRef<HTMLButtonElement | null>(null);
+    const accountPanelRef = useRef<HTMLDivElement | null>(null);
 
     const { messages, append, isLoading, setMessages, input, handleInputChange, setInput } = useChat({
         api: `${API_BASE}/api/chat`,
         sendExtraMessageFields: true,
-        headers: () => (currentUser?.userId ? { [USER_ID_HEADER]: currentUser.userId } : {}),
+        headers: () => {
+            const id = currentUser?.userId ?? guestId ?? ensureGuestId();
+            return id ? { [USER_ID_HEADER]: id } : {};
+        },
     });
+
+    const ensureAuthenticated = useCallback((): boolean => {
+        if (currentUser?.userId) {
+            return true;
+        }
+        if (guestId) {
+            return true;
+        }
+        const ensured = ensureGuestId();
+        if (ensured) {
+            setGuestId(ensured);
+            return true;
+        }
+        setToast({ type: "error", message: "Unable to start a conversation right now." });
+        return false;
+    }, [currentUser?.userId, guestId, setGuestId]);
+
+    const handleToggleAccountPanel = useCallback(() => {
+        setIsAccountPanelOpen((prev) => !prev);
+    }, []);
+
+    const handleSwitchAccount = useCallback(() => {
+        setAuthError(null);
+        setShowAuthDialog(true);
+        setIsAccountPanelOpen(false);
+    }, []);
 
     useEffect(() => {
         const stored = loadStoredUser();
@@ -192,6 +232,50 @@ export default function App() {
             setCurrentUser(stored);
         }
     }, []);
+
+    useEffect(() => {
+        if (guestId) {
+            return;
+        }
+        const ensured = ensureGuestId();
+        if (ensured) {
+            setGuestId(ensured);
+        }
+    }, [guestId]);
+
+    useEffect(() => {
+        if (!isAccountPanelOpen) {
+            return;
+        }
+        const handleClick = (event: MouseEvent) => {
+            const target = event.target as Node;
+            if (
+                accountPanelRef.current &&
+                !accountPanelRef.current.contains(target) &&
+                authStatusRef.current &&
+                !authStatusRef.current.contains(target)
+            ) {
+                setIsAccountPanelOpen(false);
+            }
+        };
+        const handleKey = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setIsAccountPanelOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClick);
+        document.addEventListener("keydown", handleKey);
+        return () => {
+            document.removeEventListener("mousedown", handleClick);
+            document.removeEventListener("keydown", handleKey);
+        };
+    }, [isAccountPanelOpen]);
+
+    useEffect(() => {
+        if (!currentUser) {
+            setIsAccountPanelOpen(false);
+        }
+    }, [currentUser]);
 
     useEffect(() => {
         if (showAuthDialog) {
@@ -219,7 +303,10 @@ export default function App() {
         }
         if (typeof window !== "undefined") {
             try {
-                window.localStorage.setItem("vinod-chatbot-theme", theme);
+                window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+                for (const legacyKey of LEGACY_THEME_KEYS) {
+                    window.localStorage.removeItem(legacyKey);
+                }
             } catch (_error) {
                 /* no-op when storage is unavailable */
             }
@@ -328,6 +415,10 @@ export default function App() {
 
     const handleSelectConversation = useCallback(
         async (conversationId: string) => {
+            if (!currentUser?.userId) {
+                ensureAuthenticated();
+                return;
+            }
             setActiveConversationId(conversationId);
             setToast(null);
             if (isCompactLayout) {
@@ -342,55 +433,120 @@ export default function App() {
                 setToast({ type: "error", message });
             }
         },
-        [isCompactLayout, setMessages],
+        [currentUser?.userId, ensureAuthenticated, isCompactLayout, setMessages],
     );
 
     const refreshConversations = useCallback(async () => {
+        if (!currentUser?.userId) {
+            setConversations([]);
+            return;
+        }
         try {
             const list = await listConversations();
             setConversations(list);
             if (list.length === 0) {
-                if (!hasAutoPromptedCreate) {
-                    setShowCreateModal(true);
-                    setCreateError(null);
-                    setHasAutoPromptedCreate(true);
-                }
-            } else if (!activeConversationId) {
+                setActiveConversationId(null);
+                setCurrentConversation(null);
+                setMessages([]);
+                return;
+            }
+            const activeId = activeConversationId;
+            if (!activeId || !list.some((item) => item.conversationId === activeId)) {
                 await handleSelectConversation(list[0].conversationId);
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             setToast({ type: "error", message });
         }
-    }, [activeConversationId, handleSelectConversation, hasAutoPromptedCreate, currentUser?.userId]);
+    }, [activeConversationId, currentUser?.userId, handleSelectConversation, setMessages]);
 
     useEffect(() => {
         void refreshConversations();
     }, [refreshConversations]);
 
-    const handleCreateConversation = useCallback(
-        async (payload: CreateConversationPayload) => {
-            setCreateBusy(true);
-            setCreateError(null);
+    useEffect(() => {
+        if (!currentUser) {
+            setIsSidebarOpen(false);
+            if (!currentConversation) {
+                const placeholder: ConversationDetail = {
+                    conversationId: "temporary",
+                    title: "New Conversation",
+                    model: "",
+                    systemPrompt: "",
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    messageCount: 0,
+                    messages: [],
+                };
+                setCurrentConversation(placeholder);
+                setMessages([]);
+            }
+            return;
+        }
+        setIsSidebarOpen(true);
+        if (currentConversation?.conversationId === "temporary") {
+            setCurrentConversation(null);
+            setMessages([]);
+        }
+    }, [currentConversation, currentUser, setMessages]);
+
+    const startNewConversation = useCallback(
+        async (announce: boolean = true): Promise<ConversationDetail | null> => {
+            if (!ensureAuthenticated()) {
+                return null;
+            }
+
+            const draftConversation = conversations.find((item) => item.messageCount === 0);
+            if (draftConversation) {
+                if (currentConversation && currentConversation.conversationId === draftConversation.conversationId) {
+                    setActiveConversationId(draftConversation.conversationId);
+                    setMessages(toMessages(currentConversation));
+                    setConversations((prev: ConversationSummary[]) => summariseConversation(prev, currentConversation));
+                    return currentConversation;
+                }
+                try {
+                    const detail =
+                        currentConversation && currentConversation.conversationId === draftConversation.conversationId
+                            ? currentConversation
+                            : await getConversation(draftConversation.conversationId);
+                    setActiveConversationId(detail.conversationId);
+                    setCurrentConversation(detail);
+                    setMessages(toMessages(detail));
+                    setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
+                    return detail;
+                } catch (error) {
+                    if (announce) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        setToast({ type: "error", message: `Could not resume conversation: ${message}` });
+                    }
+                }
+            }
+
             try {
-                const detail = await createConversation({ ...payload, overwrite: false });
-                setShowCreateModal(false);
-                setHasAutoPromptedCreate(true);
+                const detail = await createConversation({});
                 setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
-                await handleSelectConversation(detail.conversationId);
-                setToast({ type: "success", message: "Conversation created." });
+                setActiveConversationId(detail.conversationId);
+                setCurrentConversation(detail);
+                setMessages(toMessages(detail));
+                if (announce) {
+                    setToast({ type: "success", message: "New conversation started." });
+                }
+                return detail;
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
-                setCreateError(message);
-            } finally {
-                setCreateBusy(false);
+                setToast({ type: "error", message });
+                return null;
             }
         },
-        [handleSelectConversation],
+        [conversations, currentConversation, ensureAuthenticated, setMessages],
     );
 
     const handleDeleteConversation = useCallback(
         async (conversationId: string) => {
+            if (!currentUser?.userId) {
+                ensureAuthenticated();
+                return;
+            }
             const confirmed = window.confirm(
                 `Delete conversation "${conversationId}"? This action cannot be undone.`,
             );
@@ -413,7 +569,40 @@ export default function App() {
                 setToast({ type: "error", message });
             }
         },
-        [activeConversationId, setMessages],
+        [activeConversationId, currentUser?.userId, ensureAuthenticated, setMessages],
+    );
+
+    const handleRenameConversation = useCallback(
+        async (conversationId: string, nextTitle: string) => {
+            if (!ensureAuthenticated()) {
+                throw new Error("Unable to rename conversation right now.");
+            }
+            const cleaned = normaliseTitle(nextTitle);
+            if (!cleaned) {
+                throw new Error("Conversation name cannot be empty.");
+            }
+            try {
+                const detail = await renameConversationRequest(conversationId, cleaned);
+                setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
+                let shouldRefreshMessages = false;
+                setCurrentConversation((prev) => {
+                    if (prev && prev.conversationId === conversationId) {
+                        shouldRefreshMessages = true;
+                        return detail;
+                    }
+                    return prev;
+                });
+                if (shouldRefreshMessages) {
+                    setMessages(toMessages(detail));
+                }
+                setToast({ type: "success", message: "Conversation renamed." });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setToast({ type: "error", message });
+                throw (error instanceof Error ? error : new Error(message));
+            }
+        },
+        [ensureAuthenticated, normaliseTitle, setConversations, setCurrentConversation, setMessages, setToast],
     );
 
     const applyAuthenticatedUser = useCallback(
@@ -423,7 +612,6 @@ export default function App() {
             setActiveConversationId(null);
             setCurrentConversation(null);
             setMessages([]);
-            setHasAutoPromptedCreate(false);
             setShowAuthDialog(false);
             setToast({ type: "success", message: successMessage });
             await refreshConversations();
@@ -474,13 +662,9 @@ export default function App() {
 
     const handleProviderAuthenticated = useCallback(
         async (
-            provider: "google" | "microsoft" | "apple" | "phone",
+            provider: "google",
             user: StoredUser,
         ) => {
-            if (provider !== "google") {
-                setAuthError("That sign-in option is not available yet.");
-                return;
-            }
             try {
                 await applyAuthenticatedUser(user, "Signed in with Google.");
             } catch (error) {
@@ -494,6 +678,7 @@ export default function App() {
     );
 
     const handleLogout = useCallback(async () => {
+        setIsAccountPanelOpen(false);
         clearStoredUser();
         setCurrentUser(null);
         setShowAuthDialog(false);
@@ -501,10 +686,11 @@ export default function App() {
         setActiveConversationId(null);
         setCurrentConversation(null);
         setMessages([]);
-        setHasAutoPromptedCreate(false);
+        const ensuredGuest = ensureGuestId();
+        setGuestId(ensuredGuest);
         await refreshConversations();
         setToast({ type: "success", message: "Signed out." });
-    }, [refreshConversations, setMessages]);
+    }, [refreshConversations, setGuestId, setMessages]);
 
     const handleCloseAuthDialog = useCallback(() => {
         if (authBusy) {
@@ -526,6 +712,10 @@ export default function App() {
 
     const handleShareConversation = useCallback(
         async (conversationId: string) => {
+            if (!currentUser?.userId) {
+                ensureAuthenticated();
+                return;
+            }
             const conversation = conversations.find((item) => item.conversationId === conversationId);
             const title = conversation?.title ?? conversationId;
             if (typeof window === "undefined") {
@@ -558,11 +748,15 @@ export default function App() {
             }
             setToast({ type: "error", message: "Sharing is not supported on this device." });
         },
-        [conversations, setToast],
+        [conversations, currentUser?.userId, ensureAuthenticated, setToast],
     );
 
     const handleSaveConversationAsPdf = useCallback(
         async (conversationId: string) => {
+            if (!currentUser?.userId) {
+                ensureAuthenticated();
+                return;
+            }
             if (typeof window === "undefined") {
                 setToast({ type: "error", message: "Saving is only available in the browser." });
                 return;
@@ -680,11 +874,8 @@ export default function App() {
     <body>
         <header class="summary">
             <h1>${escapeHtml(title)}</h1>
-            <div class="meta">Conversation ID: ${escapeHtml(detail.conversationId)}</div>
-            <div class="meta">Model: ${escapeHtml(detail.model)}</div>
             <div class="meta">Created: ${escapeHtml(createdDisplay)}</div>
             <div class="meta">Last updated: ${escapeHtml(updatedDisplay)}</div>
-            <div class="meta">Total messages: ${detail.messageCount}</div>
         </header>
         <main>
             ${messageMarkup || "<p class=\"meta\">No messages yet.</p>"}
@@ -717,7 +908,7 @@ export default function App() {
                 setToast({ type: "error", message: "Could not prepare the PDF export." });
             }
         },
-        [currentConversation, setToast],
+        [currentConversation, currentUser?.userId, ensureAuthenticated, setToast],
     );
 
     const startVoiceSearch = useCallback(() => {
@@ -776,38 +967,48 @@ export default function App() {
     const handleSendMessage = useCallback(
         async (event: FormEvent<HTMLFormElement>) => {
             event.preventDefault();
-            if (!activeConversationId) {
-                setToast({ type: "error", message: "Select or create a conversation first." });
-                return;
-            }
             const trimmed = input.trim();
             if (!trimmed) {
+                return;
+            }
+            if (!ensureAuthenticated()) {
                 return;
             }
             if (isVoiceSearching) {
                 stopVoiceSearch();
             }
             setToast(null);
+            let targetConversationId = activeConversationId;
+            if (!targetConversationId) {
+                const detail = await startNewConversation(false);
+                if (!detail) {
+                    setToast({ type: "error", message: "Could not start a conversation." });
+                    return;
+                }
+                targetConversationId = detail.conversationId;
+            }
             try {
                 await append(
                     { role: "user", content: trimmed },
                     {
                         body: {
-                            conversationId: activeConversationId,
+                            conversationId: targetConversationId,
+                            userId: currentUser?.userId ?? guestId ?? undefined,
                         },
                     },
                 );
                 setInput("");
-                const detail = await getConversation(activeConversationId);
+                const detail = await getConversation(targetConversationId);
                 setCurrentConversation(detail);
                 setMessages(toMessages(detail));
                 setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 setToast({ type: "error", message });
+                setInput(trimmed);
             }
         },
-        [activeConversationId, append, input, isVoiceSearching, setInput, setMessages, stopVoiceSearch],
+        [activeConversationId, append, currentUser?.userId, ensureAuthenticated, getConversation, guestId, input, isVoiceSearching, setInput, setMessages, startNewConversation, stopVoiceSearch],
     );
 
     const statusMessage = toast?.message ?? null;
@@ -947,67 +1148,78 @@ export default function App() {
 
     return (
         <div className="app-page">
-            <header className="top-bar">
-                {currentUser ? (
-                    <div className="auth-status">
-                        <span className="auth-identity" aria-live="polite">
-                            {currentUser.name ? `${currentUser.name} · ${currentUser.email}` : currentUser.email}
-                        </span>
-                        <button
-                            type="button"
-                            className="auth-trigger"
-                            onClick={() => {
-                                void handleLogout();
-                            }}
-                        >
-                            Log out
-                        </button>
-                    </div>
-                ) : (
-                    <button
-                        type="button"
-                        className="auth-trigger"
-                        onClick={() => {
-                            setAuthError(null);
-                            setShowAuthDialog(true);
-                        }}
-                        aria-haspopup="dialog"
-                        aria-expanded={showAuthDialog}
-                    >
-                        Log in
-                    </button>
-                )}
-            </header>
             <div className="app-shell" ref={shellRef}>
-                <div
-                    className={clsx("sidebar-container", { collapsed: !isSidebarOpen })}
-                    style={isSidebarOpen && !isCompactLayout ? { width: sidebarWidth } : undefined}
-                    aria-hidden={!isSidebarOpen}
-                >
-                    {isSidebarOpen ? (
-                        <ConversationSidebar
-                            conversations={conversations}
-                            activeConversationId={activeConversationId}
-                            onSelect={(id) => {
-                                void handleSelectConversation(id);
-                            }}
-                            onCreate={() => {
-                                setShowCreateModal(true);
-                                setCreateError(null);
-                            }}
-                            onDelete={(id) => {
-                                void handleDeleteConversation(id);
-                            }}
-                            onShare={(id) => {
-                                void handleShareConversation(id);
-                            }}
-                            onSaveAsPdf={(id) => {
-                                void handleSaveConversationAsPdf(id);
-                            }}
-                            formatTitle={normaliseTitle}
-                        />
-                    ) : null}
-                </div>
+                {currentUser ? (
+                    <div
+                        className={clsx("sidebar-container", { collapsed: !isSidebarOpen })}
+                        style={isSidebarOpen && !isCompactLayout ? { width: sidebarWidth } : undefined}
+                        aria-hidden={!isSidebarOpen}
+                    >
+                        {isSidebarOpen ? (
+                            <div className="sidebar-content">
+                                <ConversationSidebar
+                                    conversations={conversations}
+                                    activeConversationId={activeConversationId}
+                                    onSelect={(id) => {
+                                        void handleSelectConversation(id);
+                                    }}
+                                    onCreate={() => {
+                                        void startNewConversation();
+                                    }}
+                                    onDelete={(id) => {
+                                        void handleDeleteConversation(id);
+                                    }}
+                                    onShare={(id) => {
+                                        void handleShareConversation(id);
+                                    }}
+                                    onSaveAsPdf={(id) => {
+                                        void handleSaveConversationAsPdf(id);
+                                    }}
+                                    onRename={handleRenameConversation}
+                                    formatTitle={normaliseTitle}
+                                />
+                                <div className="sidebar-footer">
+                                    <button
+                                        type="button"
+                                        className="auth-status-button"
+                                        onClick={handleToggleAccountPanel}
+                                        ref={authStatusRef}
+                                        aria-haspopup="true"
+                                        aria-expanded={isAccountPanelOpen}
+                                    >
+                                        <span className="auth-identity" aria-live="polite">
+                                            {currentUser.name || currentUser.email}
+                                        </span>
+                                        <ChevronDown size={14} aria-hidden="true" />
+                                    </button>
+                                    {isAccountPanelOpen ? (
+                                        <div
+                                            className="account-panel"
+                                            ref={accountPanelRef}
+                                            role="menu"
+                                            aria-label="Account options"
+                                        >
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    void handleLogout();
+                                                }}
+                                            >
+                                                Log out
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleSwitchAccount}
+                                            >
+                                                Switch user
+                                            </button>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            </div>
+                        ) : null}
+                    </div>
+                ) : null}
                 {!isCompactLayout && isSidebarOpen ? (
                     <div
                         className={clsx("sidebar-resizer", { dragging: isResizing })}
@@ -1090,11 +1302,11 @@ export default function App() {
                                 <div className="utility-section utility-meta">
                                     <h3>Conversation</h3>
                                     <dl>
-                                        <div>
-                                            <dt>ID</dt>
+                                        <div className="utility-meta-row">
+                                            <dt>Conversation ID</dt>
                                             <dd>{currentConversation.conversationId}</dd>
                                         </div>
-                                        <div>
+                                        <div className="utility-meta-row">
                                             <dt>Total messages</dt>
                                             <dd>{currentConversation.messageCount}</dd>
                                         </div>
@@ -1103,139 +1315,169 @@ export default function App() {
                             ) : null}
                         </aside>
                     ) : null}
-                    {currentConversation ? (
-                        <>
-                            <div className="chat-top">
-                                <header className="chat-header">
-                                    <div className="chat-heading">
-                                        <button
-                                            type="button"
-                                            className={clsx("icon-button", "sidebar-toggle", {
-                                                active: isSidebarOpen === false,
-                                            })}
-                                            onClick={() => setIsSidebarOpen((prev) => !prev)}
-                                            aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-                                            aria-pressed={!isSidebarOpen}
-                                        >
-                                            {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-                                        </button>
-                                        <div className="chat-title">
-                                            <h1>{normaliseTitle(currentConversation.title)}</h1>
-                                            {currentConversation.systemPrompt &&
-                                                currentConversation.systemPrompt !== "You are a helpful assistant." ? (
-                                                <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
-                                            ) : null}
-                                        </div>
+                    <div className="chat-top">
+                        <header className="chat-header">
+                            <div className="chat-heading-wrapper">
+                                {!currentUser ? (
+                                    <div className="brand chat-brand" aria-label="ConvoGPT">
+                                        <img src={brandLogo} alt="ConvoGPT logo" className="brand-logo" />
+                                        <span className="brand-name">ConvoGPT</span>
                                     </div>
-                                    <div className="chat-tools">
-                                        <span className="badge">
-                                            <Sparkles size={16} />
-                                            {currentConversation.messageCount} {currentConversation.messageCount === 1 ? "message" : "messages"}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            className={clsx("icon-button", { active: isUtilitiesOpen })}
-                                            onClick={() => setIsUtilitiesOpen((prev) => !prev)}
-                                            aria-label={isUtilitiesOpen ? "Hide tools" : "Show tools"}
-                                            aria-pressed={isUtilitiesOpen}
-                                        >
-                                            <Settings2 size={18} />
-                                            <span>Tools</span>
-                                        </button>
-                                    </div>
-                                </header>
-
-                            </div>
-                            <div className="message-scroll">
-                                {renderedMessages.length === 0 ? (
-                                    <div className="empty-state">
-                                        <Sparkles size={32} />
-                                        <div>
-                                            <h2>Say hello to your assistant</h2>
-                                            <p>Send a message to kick-start the conversation.</p>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    renderedMessages.map((message) => (
-                                        <MessageBubble
-                                            key={message.id}
-                                            message={message}
-                                            speechSupported={speechSupported}
-                                            voiceGender={voiceGender}
-                                            isSpeaking={speakingMessageId === message.id}
-                                            onSpeak={() => handleSpeakMessage(message.id, message.content)}
-                                            onStop={handleStopSpeaking}
-                                        />
-                                    ))
-                                )}
-                            </div>
-                            <div className="chat-composer">
-                                {statusMessage ? (
-                                    <div className={clsx("status-bar", statusClass)}>{statusMessage}</div>
                                 ) : null}
-                                <form onSubmit={handleSendMessage}>
-                                    <div className="composer-input">
-                                        <textarea
-                                            value={input}
-                                            onChange={handleInputChange}
-                                            placeholder="Ask a question or describe a task..."
-                                            disabled={!activeConversationId || isLoading}
-                                            aria-label="Message"
-                                        />
-                                        {isVoiceSearchSupported ? (
-                                            <button
-                                                type="button"
-                                                className={clsx("icon-button", "voice-search-button", {
-                                                    active: isVoiceSearching,
-                                                })}
-                                                onClick={() => {
-                                                    if (isVoiceSearching) {
-                                                        stopVoiceSearch();
-                                                    } else {
-                                                        startVoiceSearch();
-                                                    }
-                                                }}
-                                                aria-pressed={isVoiceSearching}
-                                                aria-label={isVoiceSearching ? "Stop voice search" : "Start voice search"}
-                                                disabled={!activeConversationId || isLoading}
-                                            >
-                                                {isVoiceSearching ? <MicOff size={18} /> : <Mic size={18} />}
-                                            </button>
+                                <div className="chat-heading">
+                                    <button
+                                        type="button"
+                                        className={clsx("icon-button", "sidebar-toggle", {
+                                            active: isSidebarOpen === false,
+                                        })}
+                                        onClick={() => setIsSidebarOpen((prev) => !prev)}
+                                        aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+                                        aria-pressed={!isSidebarOpen}
+                                    >
+                                        {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+                                    </button>
+                                    <div className="chat-title">
+                                        <h1>
+                                            {currentConversation
+                                                ? normaliseTitle(currentConversation.title)
+                                                : "Start chatting"}
+                                        </h1>
+                                        {currentConversation?.systemPrompt &&
+                                            currentConversation.systemPrompt !== "You are a helpful assistant." ? (
+                                            <p className="conversation-subtitle">{currentConversation.systemPrompt}</p>
                                         ) : null}
                                     </div>
+                                </div>
+                            </div>
+                            <div className="chat-tools">
+                                {currentConversation ? (
+                                    <span className="badge">
+                                        <Sparkles size={16} />
+                                        {currentConversation.messageCount} {" "}
+                                        {currentConversation.messageCount === 1 ? "message" : "messages"}
+                                    </span>
+                                ) : (
+                                    <span className="badge">
+                                        <Sparkles size={16} />
+                                        Ready to begin
+                                    </span>
+                                )}
+                                <button
+                                    type="button"
+                                    className={clsx("icon-button", { active: isUtilitiesOpen })}
+                                    onClick={() => setIsUtilitiesOpen((prev) => !prev)}
+                                    aria-label={isUtilitiesOpen ? "Hide tools" : "Show tools"}
+                                    aria-pressed={isUtilitiesOpen}
+                                >
+                                    <Settings2 size={18} />
+                                    <span>Settings</span>
+                                </button>
+                                {!currentUser ? (
                                     <button
-                                        type="submit"
-                                        className="send-button"
-                                        disabled={!activeConversationId || isLoading || input.trim().length === 0}
+                                        type="button"
+                                        className="auth-trigger chat-login"
+                                        onClick={() => {
+                                            setAuthError(null);
+                                            setShowAuthDialog(true);
+                                        }}
+                                        aria-haspopup="dialog"
+                                        aria-expanded={showAuthDialog}
                                     >
-                                        {isLoading ? <Loader2 size={18} className="spin" /> : <SendHorizonal size={20} />}
-                                        <span className="send-label">Send</span>
+                                        Log in
                                     </button>
-                                </form>
-                                {showCalculator ? <CalculatorPanel onClose={() => setShowCalculator(false)} /> : null}
+                                ) : null}
                             </div>
-                        </>
-                    ) : (
-                        <div className="empty-state">
-                            <Sparkles size={40} />
-                            <div>
-                                <h2>Create your first conversation</h2>
-                                <p>Craft a unique thread to explore ideas, debug issues, or draft content.</p>
+                        </header>
+                    </div>
+                    <div className="message-scroll">
+                        {currentConversation ? (
+                            renderedMessages.length === 0 ? (
+                                <div className="empty-state">
+                                    <Sparkles size={32} />
+                                    <div>
+                                        <h2>Say hello to your assistant</h2>
+                                        <p>Send a message to kick-start the conversation.</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                renderedMessages.map((message) => (
+                                    <MessageBubble
+                                        key={message.id}
+                                        message={message}
+                                        speechSupported={speechSupported}
+                                        voiceGender={voiceGender}
+                                        isSpeaking={speakingMessageId === message.id}
+                                        onSpeak={() => handleSpeakMessage(message.id, message.content)}
+                                        onStop={handleStopSpeaking}
+                                    />
+                                ))
+                            )
+                        ) : (
+                            <div className="empty-state">
+                                <Sparkles size={40} />
+                                <div>
+                                    <h2>Start your first conversation</h2>
+                                    <p>Type a message below or launch a fresh thread when you are ready.</p>
+                                </div>
+                                <button
+                                    className="create-button"
+                                    type="button"
+                                    onClick={() => {
+                                        void startNewConversation();
+                                    }}
+                                >
+                                    <Plus size={18} /> Start a conversation
+                                </button>
                             </div>
-                            <button className="create-button" type="button" onClick={() => setShowCreateModal(true)}>
-                                <Plus size={18} /> Start a conversation
+                        )}
+                    </div>
+                    <div className="chat-composer">
+                        {statusMessage ? (
+                            <div className={clsx("status-bar", statusClass)}>{statusMessage}</div>
+                        ) : null}
+                        <form onSubmit={handleSendMessage}>
+                            <div className="composer-input">
+                                <textarea
+                                    value={input}
+                                    onChange={handleInputChange}
+                                    placeholder="Ask a question or describe a task..."
+                                    disabled={isLoading}
+                                    aria-label="Message"
+                                />
+                                {isVoiceSearchSupported ? (
+                                    <button
+                                        type="button"
+                                        className={clsx("icon-button", "voice-search-button", {
+                                            active: isVoiceSearching,
+                                        })}
+                                        onClick={() => {
+                                            if (isVoiceSearching) {
+                                                stopVoiceSearch();
+                                            } else {
+                                                startVoiceSearch();
+                                            }
+                                        }}
+                                        aria-pressed={isVoiceSearching}
+                                        aria-label={isVoiceSearching ? "Stop voice search" : "Start voice search"}
+                                        disabled={isLoading}
+                                    >
+                                        {isVoiceSearching ? <MicOff size={18} /> : <Mic size={18} />}
+                                    </button>
+                                ) : null}
+                            </div>
+                            <button
+                                type="submit"
+                                className="send-button"
+                                disabled={isLoading || input.trim().length === 0}
+                            >
+                                {isLoading ? <Loader2 size={18} className="spin" /> : <SendHorizonal size={20} />}
+                                <span className="send-label">Send</span>
                             </button>
-                        </div>
-                    )}
+                        </form>
+                        {showCalculator ? <CalculatorPanel onClose={() => setShowCalculator(false)} /> : null}
+                    </div>
                 </section>
-            </div>
-            <CreateConversationDialog
-                open={showCreateModal}
-                onClose={() => setShowCreateModal(false)}
-                onCreate={(payload) => handleCreateConversation(payload)}
-                isSubmitting={createBusy}
-                error={createError}
-            />
+            </div >
             <AuthDialog
                 open={showAuthDialog}
                 onClose={handleCloseAuthDialog}
@@ -1245,6 +1487,6 @@ export default function App() {
                 onStayLoggedOut={handleStayLoggedOutChoice}
                 onProviderAuthenticated={handleProviderAuthenticated}
             />
-        </div>
+        </div >
     );
 }

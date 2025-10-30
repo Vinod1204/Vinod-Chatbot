@@ -1,1 +1,1 @@
-"""Backend package for the Vinod Chatbot project."""
+"""Backend package for the ConvoGPT project."""

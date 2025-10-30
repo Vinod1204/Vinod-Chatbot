@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -54,6 +55,47 @@ from openai import OpenAI
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 DEFAULT_CONVERSATION_ROOT = Path(__file__).resolve().parent / "conversations"
+TITLE_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "are",
+    "you",
+    "your",
+    "with",
+    "from",
+    "that",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "will",
+    "would",
+    "could",
+    "should",
+    "have",
+    "has",
+    "had",
+    "into",
+    "about",
+    "need",
+    "help",
+    "please",
+    "make",
+    "how",
+    "can",
+    "why",
+    "does",
+    "like",
+    "want",
+    "just",
+    "been",
+    "some",
+    "more",
+    "any",
+    "guide",
+}
 
 
 def utc_now() -> str:
@@ -190,7 +232,7 @@ class ConversationStore:
         now = utc_now()
         conv = Conversation(
             conversation_id=cid,
-            title=title or cid,
+            title=title or "New Conversation",
             model=model,
             system_prompt=system_prompt,
             created_at=now,
@@ -227,6 +269,8 @@ class Chatbot:
         conv = self.store.load(cid)
 
         conv.add("user", user_text)
+        if len(conv.messages) == 1 and _should_autoname(conv):
+            conv.title = _generate_title_from_text(user_text)
         self.store.save(conv)
 
         # Call the Chat Completions API
@@ -258,6 +302,36 @@ class Chatbot:
         conv.add("assistant", ai_text, usage=usage)
         self.store.save(conv)
         return ai_text
+
+
+def _should_autoname(conv: Conversation) -> bool:
+    title = (conv.title or "").strip().lower()
+    if not title:
+        return True
+    if title == conv.conversation_id.lower():
+        return True
+    if title.startswith("conversation "):
+        return True
+    if title in {"new conversation", "untitled conversation"}:
+        return True
+    return False
+
+
+def _generate_title_from_text(text: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9' ]+", " ", text).strip()
+    if not cleaned:
+        return "New Conversation"
+    words = [part for part in cleaned.split() if part]
+    if not words:
+        return "New Conversation"
+    meaningful = [word for word in words if len(
+        word) > 2 and word.lower() not in TITLE_STOPWORDS]
+    candidates = meaningful or words
+    title_parts = candidates[:2]
+    formatted = [part.capitalize() if not part.isupper()
+                 else part for part in title_parts]
+    title = " ".join(formatted)
+    return title or "New Conversation"
 
 
 def parse_args():

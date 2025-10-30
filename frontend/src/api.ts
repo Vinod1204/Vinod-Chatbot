@@ -5,7 +5,7 @@ import type {
     CreateConversationPayload,
     StoredUser,
 } from "./types";
-import { loadStoredUser } from "./auth";
+import { loadGuestId, loadStoredUser } from "./auth";
 import { API_ROOT } from "./config";
 const USER_ID_HEADER = "x-user-id";
 
@@ -35,7 +35,8 @@ const toHeaderRecord = (input?: HeadersInit): Record<string, string> => {
 const authHeaders = (): Record<string, string> => {
     const user = loadStoredUser();
     if (!user?.userId) {
-        return {};
+        const guest = loadGuestId();
+        return guest ? { [USER_ID_HEADER]: guest } : {};
     }
     return { [USER_ID_HEADER]: user.userId };
 };
@@ -91,17 +92,27 @@ export async function getConversation(
 }
 
 export async function createConversation(
-    payload: CreateConversationPayload,
+    payload: CreateConversationPayload = {},
 ): Promise<ConversationDetail> {
     return request<ConversationDetail>("/api/conversations", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payload ?? {}),
     });
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {
     await request<void>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
         method: "DELETE",
+    });
+}
+
+export async function renameConversation(
+    conversationId: string,
+    title: string,
+): Promise<ConversationDetail> {
+    return request<ConversationDetail>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title }),
     });
 }
 

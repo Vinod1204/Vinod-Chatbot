@@ -32,7 +32,8 @@ export type ChatResponse = {
 };
 
 export type CreateConversationPayload = {
-    title: string;
+    title?: string;
+    conversationId?: string;
     systemPrompt?: string;
     overwrite?: boolean;
 };

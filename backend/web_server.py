@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -102,7 +103,7 @@ SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URL = os.getenv("GOOGLE_REDIRECT_URL")
-OAUTH_MESSAGE_SOURCE = "vinod-chatbot-oauth"
+OAUTH_MESSAGE_SOURCE = "convogpt-oauth"
 GOOGLE_OAUTH_ENABLED = bool(
     USERS_ENABLED and SESSION_SECRET_KEY and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
 )
@@ -199,7 +200,7 @@ class ConversationDetail(ConversationSummary):
 
 
 class ConversationCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=120)
+    title: Optional[str] = Field(None, max_length=120)
     conversationId: Optional[str] = Field(None, min_length=1, max_length=120)
     systemPrompt: Optional[str] = None
     overwrite: bool = False
@@ -216,6 +217,24 @@ class ConversationCreate(BaseModel):
                 "Conversation id must contain alphanumeric or -_. characters"
             )
         return safe
+
+    @validator("title")
+    def validate_title(cls, value: Optional[str]) -> Optional[str]:  # noqa: D401, N805
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
+class ConversationRename(BaseModel):
+    title: str = Field(..., max_length=120)
+
+    @validator("title")
+    def validate_title(cls, value: str) -> str:  # noqa: D401, N805
+        text = value.strip()
+        if not text:
+            raise ValueError("Title cannot be empty.")
+        return text
 
 
 class MessagePayload(BaseModel):
@@ -236,6 +255,7 @@ class ChatRequest(BaseModel):
     input: Optional[str] = None
     model: Optional[str] = None
     systemPrompt: Optional[str] = None
+    userId: Optional[str] = Field(None, alias="userId")
 
 
 class ChatResponse(BaseModel):
@@ -252,10 +272,56 @@ class UserCreatePayload(BaseModel):
     password: str = Field(..., min_length=8)
     name: Optional[str] = None
 
+    @validator("email", pre=True)
+    def _strip_email(cls, value: str) -> str:  # noqa: D401, N805
+        """Normalise and trim incoming email addresses."""
+        if not isinstance(value, str):
+            raise ValueError("Email must be a string")
+        return value.strip()
+
+    @validator("password")
+    def _validate_password(cls, value: str) -> str:  # noqa: D401, N805
+        """Enforce basic password complexity requirements."""
+        password = value.strip()
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        if re.search(r"\s", password):
+            raise ValueError("Password cannot contain whitespace characters.")
+        if not re.search(r"[A-Z]", password):
+            raise ValueError(
+                "Password must include at least one uppercase letter.")
+        if not re.search(r"[a-z]", password):
+            raise ValueError(
+                "Password must include at least one lowercase letter.")
+        if not re.search(r"\d", password):
+            raise ValueError("Password must include at least one numeral.")
+        return password
+
+    @validator("name")
+    def _normalise_name(cls, value: Optional[str]) -> Optional[str]:  # noqa: D401, N805
+        """Collapse blank display names to None."""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
 
 class UserLoginPayload(BaseModel):
     email: EmailStr
     password: str
+
+    @validator("email", pre=True)
+    def _strip_login_email(cls, value: str) -> str:  # noqa: D401, N805
+        if not isinstance(value, str):
+            raise ValueError("Email must be a string")
+        return value.strip()
+
+    @validator("password")
+    def _strip_login_password(cls, value: str) -> str:  # noqa: D401, N805
+        password = value.strip()
+        if not password:
+            raise ValueError("Password is required.")
+        return password
 
 
 class UserResponse(BaseModel):
@@ -276,11 +342,21 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _owner_id(request: Request) -> str:
+def _owner_id(request: Request, *, fallback_user_id: Optional[str] = None) -> str:
     header = request.headers.get(USER_ID_HEADER)
     if header:
         return header.strip()
-    return _client_ip(request)
+    if fallback_user_id:
+        candidate = str(fallback_user_id).strip()
+        if candidate:
+            return candidate
+    if hasattr(request, "session"):
+        session_user = request.session.get(
+            "user_id")  # type: ignore[attr-defined]
+        if session_user:
+            return str(session_user)
+    raise HTTPException(
+        status_code=401, detail="Authentication is required for this action.")
 
 
 def _message_to_dict(msg: Message) -> Dict[str, Any]:
@@ -429,7 +505,12 @@ def _oauth_popup_response(
     return HTMLResponse(content=html)
 
 
-def _upsert_oauth_user(provider: str, profile: Dict[str, Any]) -> UserResponse:
+def _upsert_oauth_user(
+    provider: str,
+    profile: Dict[str, Any],
+    *,
+    allow_create: bool = True,
+) -> UserResponse:
     email = profile.get("email")
     if not email:
         raise HTTPException(
@@ -437,6 +518,12 @@ def _upsert_oauth_user(provider: str, profile: Dict[str, Any]) -> UserResponse:
     collection = _users_collection_or_error()
     now = utc_now()
     normalised_email = str(email).lower()
+    existing = collection.find_one({"email": normalised_email})
+    if not existing and not allow_create:
+        raise HTTPException(
+            status_code=404,
+            detail="No account exists for this provider email. Please sign up first.",
+        )
     provider_record = {
         "sub": profile.get("sub") or profile.get("id"),
         "email": normalised_email,
@@ -451,12 +538,13 @@ def _upsert_oauth_user(provider: str, profile: Dict[str, Any]) -> UserResponse:
             "email": normalised_email,
             "updatedAt": now,
             f"providers.{provider}": provider_record,
-        },
-        "$setOnInsert": {
+        }
+    }
+    if allow_create:
+        update_query["$setOnInsert"] = {
             "createdAt": now,
             "password": None,
-        },
-    }
+        }
     if profile.get("name"):
         update_query["$set"]["name"] = profile["name"]
     document = collection.find_one_and_update(
@@ -503,7 +591,12 @@ def login_user(payload: UserLoginPayload) -> UserResponse:
     collection = _users_collection_or_error()
     email = payload.email.lower()
     user = collection.find_one({"email": email})
-    if not user or not verify_password(payload.password, user.get("password", "")):
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="We couldn't find an account with that email. Please sign up to continue.",
+        )
+    if not verify_password(payload.password, user.get("password", "")):
         raise HTTPException(
             status_code=401, detail="Invalid email or password.")
     collection.update_one({"_id": user["_id"]}, {
@@ -589,7 +682,8 @@ async def google_oauth_callback(request: Request):
         )
 
     try:
-        user_response = _upsert_oauth_user("google", userinfo)
+        user_response = _upsert_oauth_user(
+            "google", userinfo, allow_create=False)
     except HTTPException as exc:
         return _oauth_popup_response("google", success=False, message=str(exc.detail), return_url=return_url)
     except PyMongoError as exc:  # pragma: no cover - database errors
@@ -602,6 +696,9 @@ async def google_oauth_callback(request: Request):
         )
 
     logger.info("Google sign-in succeeded for %s", user_response.email)
+    if hasattr(request, "session"):
+        # type: ignore[attr-defined]
+        request.session["user_id"] = user_response.userId
     return _oauth_popup_response(
         "google",
         success=True,
@@ -674,6 +771,24 @@ def get_conversation(conversation_id: str, request: Request) -> ConversationDeta
     return ConversationDetail(**_conversation_to_dict(conv))
 
 
+@app.patch("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+def rename_conversation(
+    conversation_id: str, payload: ConversationRename, request: Request
+) -> ConversationDetail:
+    owner = _owner_id(request)
+    if not store.exists(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv = store.load(conversation_id)
+    if conv.owner != owner:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    new_title = payload.title.strip()
+    if conv.title != new_title:
+        conv.title = new_title
+        conv.updated_at = utc_now()
+        store.save(conv)
+    return ConversationDetail(**_conversation_to_dict(conv))
+
+
 @app.delete(
     "/api/conversations/{conversation_id}",
     status_code=204,
@@ -718,7 +833,7 @@ def send_message(conversation_id: str, payload: MessagePayload, request: Request
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat_endpoint(payload: ChatRequest, request: Request) -> ChatResponse:
-    owner = _owner_id(request)
+    owner = _owner_id(request, fallback_user_id=payload.userId)
     conv = _ensure_conversation(
         payload.conversationId,
         owner=owner,

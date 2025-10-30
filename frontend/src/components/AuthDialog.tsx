@@ -1,10 +1,9 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import type { JSX } from "react";
-import { Apple, Phone, X } from "lucide-react";
+import { X } from "lucide-react";
 import type { StoredUser } from "../types";
 import { API_ROOT, GOOGLE_CLIENT_ID, OAUTH_MESSAGE_SOURCE } from "../config";
 
-type ProviderKey = "google" | "microsoft" | "apple" | "phone";
+type ProviderKey = "google";
 
 interface AuthDialogProps {
     open: boolean;
@@ -39,15 +38,6 @@ const GoogleLogo = () => (
             fill="#EA4335"
             d="M12 4.75c1.76 0 3.34.605 4.58 1.79l3.4-3.4C17.955 1.13 15.235 0 12 0 7.29 0 3.255 2.695 1.28 6.58l4.01 3.095C6.235 6.855 8.88 4.75 12 4.75z"
         />
-    </svg>
-);
-
-const MicrosoftLogo = () => (
-    <svg className="brand-microsoft" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="1" y="1" width="10" height="10" fill="#F25022" />
-        <rect x="13" y="1" width="10" height="10" fill="#7FBA00" />
-        <rect x="1" y="13" width="10" height="10" fill="#00A4EF" />
-        <rect x="13" y="13" width="10" height="10" fill="#FFB900" />
     </svg>
 );
 
@@ -150,6 +140,9 @@ export function AuthDialog({
             }
             const detail = data.message || data.error || "Google sign-in failed. Please try again.";
             setFormError(detail);
+            if (/sign up/i.test(detail)) {
+                setMode("signup");
+            }
         };
         window.addEventListener("message", handleMessage);
         return () => window.removeEventListener("message", handleMessage);
@@ -188,6 +181,9 @@ export function AuthDialog({
         } catch (authError) {
             const message = authError instanceof Error ? authError.message : String(authError);
             setFormError(message);
+            if (mode === "login" && /sign up/i.test(message)) {
+                setMode("signup");
+            }
         }
     };
 
@@ -207,7 +203,7 @@ export function AuthDialog({
         const features = `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
         const popup = window.open(
             `${API_ROOT}/api/auth/oauth/google/start`,
-            "vinod_chatbot_google_oauth",
+            "convogpt_google_oauth",
             features,
         );
         if (!popup) {
@@ -235,44 +231,16 @@ export function AuthDialog({
         onClose();
     };
 
-    const providerButtons: Array<{
-        key: ProviderKey;
-        label: string;
-        onClick?: () => void;
-        disabled: boolean;
-        icon: JSX.Element;
-        note?: string;
-    }> = [
-            {
-                key: "google",
-                label: `${providerPrefix} Google`,
-                onClick: handleGoogleSignIn,
-                disabled: disableForm || !googleReady,
-                icon: <GoogleLogo />,
-                note: googleReady ? undefined : "Configure Google OAuth",
-            },
-            {
-                key: "microsoft",
-                label: `${providerPrefix} Microsoft`,
-                disabled: true,
-                icon: <MicrosoftLogo />,
-                note: "Coming soon",
-            },
-            {
-                key: "apple",
-                label: `${providerPrefix} Apple`,
-                disabled: true,
-                icon: <Apple size={18} strokeWidth={1.6} />,
-                note: "Coming soon",
-            },
-            {
-                key: "phone",
-                label: `${providerPrefix} Phone`,
-                disabled: true,
-                icon: <Phone size={18} strokeWidth={1.6} />,
-                note: "Coming soon",
-            },
-        ];
+    const providerButtons = [
+        {
+            key: "google" as const,
+            label: `${providerPrefix} Google`,
+            onClick: handleGoogleSignIn,
+            disabled: disableForm || !googleReady,
+            icon: <GoogleLogo />,
+            note: googleReady ? undefined : "Configure Google OAuth",
+        },
+    ];
 
     return (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>

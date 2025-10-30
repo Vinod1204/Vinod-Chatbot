@@ -1,4 +1,4 @@
-# Vinod Chatbot
+# ConvoGPT
 
 A local-first multi-turn assistant that reuses the Python CLI logic, adds a FastAPI backend, and ships with a Vite + React frontend powered by the Vercel AI SDK.
 
@@ -56,6 +56,15 @@ uvicorn backend.web_server:app --reload
 
 The API listens on `http://localhost:8000` by default. Update `ALLOWED_ORIGINS`, `CONVERSATION_ROOT`, `CHATBOT_TEMPERATURE`, etc., via environment variables if needed. By default, conversations persist under `backend/conversations/`.
 
+### Authentication and validation
+
+- Email addresses are normalised to lowercase and trimmed before being stored.
+- Passwords must be at least 8 characters and contain uppercase, lowercase, and numeric characters with no whitespace.
+- Logging in with an unknown email returns an explicit `404` so clients can nudge the user to sign up; the frontend switches to sign-up mode automatically when it receives that response.
+- Passwords are hashed with PBKDF2-SHA256 via `passlib`; never store or log plaintext secrets.
+- Google sign-in is available for linking existing accounts; first-time users should register with email and password before using Google OAuth.
+- Conversation APIs require an authenticated `x-user-id` header (or OAuth session) and conversations are now owned by user accounts rather than IP addresses.
+
 ### Telemetry with Langfuse (optional)
 
 If you provide `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`, the app will automatically wrap the OpenAI SDK with Langfuse’s OpenAI client. This captures spans, prompts, and responses without changing any API calls. Set `LANGFUSE_HOST` when self-hosting Langfuse. Remove or unset these variables to disable tracing.
@@ -103,7 +112,7 @@ vercel --prod
 1. Choose a Python-friendly host that keeps `uvicorn` (or Gunicorn + Uvicorn workers) running—Render, Railway, Fly.io, Azure App Service, and DigitalOcean App Platform all work well.
 2. Configure your environment variables there (`OPENAI_API_KEY`, `ALLOWED_ORIGINS`, `CONVERSATION_ROOT`, any database URLs). Include the deployed frontend origin in `ALLOWED_ORIGINS` so browsers can reach the API.
 3. Expose the app with a command like `uvicorn backend.web_server:app --host 0.0.0.0 --port ${PORT:-8000}` so it binds to the platform-provided port when present. Some platforms expect a `start` script; align with their docs and avoid hard-coding privileged ports.
-4. Verify that the host assigns a public HTTPS URL (for example `https://vinod-chatbot.onrender.com`). Test `/health` on that URL to confirm the deployment is reachable.
+4. Verify that the host assigns a public HTTPS URL (for example `https://convogpt.onrender.com`). Test `/health` on that URL to confirm the deployment is reachable.
 5. Copy the public API URL and add it as `VITE_API_URL` in the Vercel project settings (Project Settings → Environment Variables → Production). Redeploy the frontend so users receive the new environment variable.
 6. Optionally add a staging environment: point Vercel preview deployments at the staging backend and reserve the production value for the `Production` environment in Vercel settings.
 
@@ -138,7 +147,7 @@ Render provides an HTTPS-enabled free tier that auto-deploys from GitHub and is 
 ## Project structure
 
 ```
-Vinod-Chatbot/
+ConvoGPT/
 ├── backend/
 │   ├── __init__.py
 │   ├── conversations/              # JSON transcripts saved per conversation id

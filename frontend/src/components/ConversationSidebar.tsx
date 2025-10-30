@@ -1,6 +1,7 @@
 import clsx from "clsx";
-import { KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
-import { FileDown, MessageSquare, MoreVertical, Plus, Share2, Trash2 } from "lucide-react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FileDown, MessageSquare, MoreVertical, Pencil, Plus, Share2, Trash2, X } from "lucide-react";
+import brandLogo from "../../ConvoGPT.png";
 import type { ConversationSummary } from "../types";
 
 type SidebarProps = {
@@ -11,6 +12,7 @@ type SidebarProps = {
     onDelete: (conversationId: string) => void;
     onShare: (conversationId: string) => void;
     onSaveAsPdf: (conversationId: string) => void;
+    onRename: (conversationId: string, title: string) => Promise<void> | void;
     formatTitle: (value: string) => string;
 };
 
@@ -22,38 +24,93 @@ export function ConversationSidebar({
     onDelete,
     onShare,
     onSaveAsPdf,
+    onRename,
     formatTitle,
 }: SidebarProps) {
     const [menuConversationId, setMenuConversationId] = useState<string | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
+    const renameInputRef = useRef<HTMLInputElement | null>(null);
+    const [isRenaming, setIsRenaming] = useState(false);
+    const [renameValue, setRenameValue] = useState("");
+    const [renameError, setRenameError] = useState<string | null>(null);
+    const [renameBusy, setRenameBusy] = useState(false);
+
+    const activeMenuConversation = useMemo(() => {
+        if (!menuConversationId) {
+            return null;
+        }
+        return conversations.find((item) => item.conversationId === menuConversationId) ?? null;
+    }, [conversations, menuConversationId]);
+
+    useEffect(() => {
+        if (!activeMenuConversation) {
+            setIsRenaming(false);
+            setRenameValue("");
+            setRenameError(null);
+            setRenameBusy(false);
+            return;
+        }
+        setIsRenaming(false);
+        setRenameValue(activeMenuConversation.title);
+        setRenameError(null);
+        setRenameBusy(false);
+    }, [activeMenuConversation]);
 
     useEffect(() => {
         if (!menuConversationId) {
             menuRef.current = null;
             return;
         }
-        const handleClick = (event: MouseEvent) => {
-            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-                setMenuConversationId(null);
-            }
-        };
         const handleEscape = (event: globalThis.KeyboardEvent) => {
             if (event.key === "Escape") {
                 setMenuConversationId(null);
             }
         };
-        document.addEventListener("mousedown", handleClick);
         document.addEventListener("keydown", handleEscape);
         return () => {
-            document.removeEventListener("mousedown", handleClick);
             document.removeEventListener("keydown", handleEscape);
         };
     }, [menuConversationId]);
 
+    useEffect(() => {
+        if (!isRenaming) {
+            return;
+        }
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+    }, [isRenaming]);
+
+    const handleRenameSubmit = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (!activeMenuConversation) {
+            return;
+        }
+        const trimmed = renameValue.trim();
+        if (!trimmed) {
+            setRenameError("Conversation name cannot be empty.");
+            return;
+        }
+        setRenameBusy(true);
+        setRenameError(null);
+        try {
+            await onRename(activeMenuConversation.conversationId, trimmed);
+            setMenuConversationId(null);
+            setIsRenaming(false);
+            setRenameBusy(false);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Could not rename conversation.";
+            setRenameError(message);
+            setRenameBusy(false);
+        }
+    };
+
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
-                <div className="sidebar-title">Conversations</div>
+                <div className="sidebar-heading">
+                    <img src={brandLogo} alt="ConvoGPT logo" className="sidebar-title-logo" />
+                    <div className="sidebar-title">Conversations</div>
+                </div>
                 <button type="button" className="create-button" onClick={onCreate}>
                     <Plus size={16} /> New
                 </button>
@@ -103,36 +160,107 @@ export function ConversationSidebar({
                                         current === conversation.conversationId ? null : conversation.conversationId,
                                     );
                                 }}
-                                aria-haspopup="menu"
+                                aria-haspopup="dialog"
                                 aria-expanded={menuConversationId === conversation.conversationId}
                                 aria-label={`Open menu for ${conversation.conversationId}`}
                             >
                                 <MoreVertical size={16} />
                             </button>
-                            {menuConversationId === conversation.conversationId ? (
-                                <div
-                                    className="conversation-menu"
-                                    ref={menuRef}
-                                    role="menu"
-                                >
+                        </div>
+                    </div>
+                ))}
+            </div>
+            {activeMenuConversation ? (
+                <div
+                    className="conversation-menu-overlay"
+                    role="presentation"
+                    onClick={() => setMenuConversationId(null)}
+                >
+                    <div
+                        className="conversation-menu-dialog"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="conversation-menu-title"
+                        onClick={(event) => event.stopPropagation()
+                        }
+                        ref={menuRef}
+                    >
+                        <header className="conversation-menu-header">
+                            <div>
+                                <h2 id="conversation-menu-title">Conversation options</h2>
+                                <p>{formatTitle(activeMenuConversation.title)}</p>
+                            </div>
+                            <button
+                                type="button"
+                                className="icon-button conversation-menu-close"
+                                onClick={() => setMenuConversationId(null)}
+                                aria-label="Close conversation options"
+                            >
+                                <X size={16} />
+                            </button>
+                        </header>
+                        <div className="conversation-menu-actions">
+                            {isRenaming ? (
+                                <form className="conversation-rename-form" onSubmit={handleRenameSubmit}>
+                                    <label className="sr-only" htmlFor="conversation-rename-input">
+                                        New conversation name
+                                    </label>
+                                    <input
+                                        id="conversation-rename-input"
+                                        ref={renameInputRef}
+                                        type="text"
+                                        value={renameValue}
+                                        onChange={(event) => {
+                                            setRenameValue(event.target.value);
+                                            if (renameError) {
+                                                setRenameError(null);
+                                            }
+                                        }}
+                                        disabled={renameBusy}
+                                        placeholder="Enter a new name"
+                                        autoComplete="off"
+                                    />
+                                    {renameError ? <p className="conversation-rename-error">{renameError}</p> : null}
+                                    <div className="conversation-rename-actions">
+                                        <button type="button" onClick={() => {
+                                            setIsRenaming(false);
+                                            setRenameError(null);
+                                            setRenameValue(activeMenuConversation.title);
+                                            setRenameBusy(false);
+                                        }} disabled={renameBusy}>
+                                            Cancel
+                                        </button>
+                                        <button type="submit" disabled={renameBusy}>
+                                            {renameBusy ? "Saving..." : "Save"}
+                                        </button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <>
                                     <button
                                         type="button"
-                                        role="menuitem"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            onShare(conversation.conversationId);
+                                        onClick={() => {
+                                            setIsRenaming(true);
+                                            setRenameError(null);
+                                        }}
+                                    >
+                                        <Pencil size={14} />
+                                        <span>Rename conversation</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            onShare(activeMenuConversation.conversationId);
                                             setMenuConversationId(null);
                                         }}
                                     >
                                         <Share2 size={14} />
-                                        <span>Share</span>
+                                        <span>Share conversation</span>
                                     </button>
                                     <button
                                         type="button"
-                                        role="menuitem"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            onSaveAsPdf(conversation.conversationId);
+                                        onClick={() => {
+                                            onSaveAsPdf(activeMenuConversation.conversationId);
                                             setMenuConversationId(null);
                                         }}
                                     >
@@ -141,23 +269,21 @@ export function ConversationSidebar({
                                     </button>
                                     <button
                                         type="button"
-                                        role="menuitem"
                                         className="danger"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            onDelete(conversation.conversationId);
+                                        onClick={() => {
+                                            onDelete(activeMenuConversation.conversationId);
                                             setMenuConversationId(null);
                                         }}
                                     >
                                         <Trash2 size={14} />
-                                        <span>Delete</span>
+                                        <span>Delete conversation</span>
                                     </button>
-                                </div>
-                            ) : null}
+                                </>
+                            )}
                         </div>
                     </div>
-                ))}
-            </div>
+                </div>
+            ) : null}
         </aside>
     );
 }

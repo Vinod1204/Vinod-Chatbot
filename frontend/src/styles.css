@@ -72,6 +72,18 @@ button {
     font: inherit;
 }
 
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 html,
 body {
     height: 100%;
@@ -94,12 +106,34 @@ body {
     min-height: 100vh;
 }
 
-.top-bar {
-    display: flex;
+.brand {
+    display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
     gap: 12px;
-    padding: 16px 24px 0;
+    font-weight: 700;
+    font-size: 1.125rem;
+    color: var(--text-primary);
+}
+
+.brand-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.18);
+}
+
+.brand-name {
+    letter-spacing: 0.02em;
+}
+
+.chat-heading-wrapper {
+    display: grid;
+    gap: 12px;
+}
+
+.chat-brand {
+    padding: 0;
 }
 
 .auth-trigger {
@@ -116,10 +150,94 @@ body {
     transition: transform 0.15s ease, box-shadow 0.2s ease;
 }
 
-.auth-status {
+.auth-status-button {
     display: inline-flex;
     align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 8px 16px;
+    background: transparent;
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.auth-status-button:hover,
+.auth-status-button:focus-visible {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(99, 102, 241, 0.18);
+    background: var(--sidebar-highlight);
+}
+
+.auth-status-button svg {
+    transition: transform 0.2s ease;
+}
+
+.auth-status-button[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+}
+
+
+.sidebar-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+}
+
+.sidebar-footer {
+    margin-top: auto;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+    position: relative;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
+}
+
+.sidebar-footer .auth-status-button {
+    width: 100%;
+    justify-content: space-between;
+}
+
+.account-panel {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    right: 0;
+    left: 0;
+    background: var(--card-bg);
+    border-radius: 16px;
+    border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-elevated);
+    padding: 16px;
+    display: grid;
+    gap: 10px;
+    z-index: 30;
+}
+
+.account-panel button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: none;
+    background: var(--sidebar-highlight);
+    color: var(--text-primary);
+    font-weight: 600;
+    padding: 10px 12px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.account-panel button:hover,
+.account-panel button:focus-visible {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 24px rgba(99, 102, 241, 0.24);
+    background: var(--user-bg);
+    color: #fff;
 }
 
 .auth-identity {
@@ -152,10 +270,6 @@ body {
     .app-shell {
         padding: 16px;
     }
-
-    .top-bar {
-        padding: 16px 16px 0;
-    }
 }
 
 .sidebar-container {
@@ -176,6 +290,8 @@ body {
     flex-direction: column;
     gap: 16px;
     width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .sidebar-header {
@@ -227,6 +343,8 @@ body {
     gap: 12px;
     overflow-y: auto;
     padding-right: 4px;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .conversation-item {
@@ -279,42 +397,147 @@ body {
     padding: 6px;
 }
 
-.conversation-menu {
-    position: absolute;
-    top: 36px;
-    right: 0;
-    background: var(--card-bg);
-    border-radius: 14px;
-    border: 1px solid var(--border-soft);
-    box-shadow: 0 16px 32px rgba(15, 23, 42, 0.18);
-    display: grid;
-    gap: 4px;
-    padding: 8px;
-    z-index: 20;
-    min-width: 160px;
-}
-
-.conversation-menu button {
+.conversation-menu-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(6px);
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: 100%;
-    border: none;
-    background: transparent;
-    padding: 8px 10px;
-    border-radius: 10px;
-    color: var(--text-primary);
+    justify-content: center;
+    padding: 24px;
+    z-index: 50;
+}
+
+.conversation-menu-dialog {
+    background: var(--card-bg);
+    border-radius: 24px;
+    border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-elevated);
+    width: min(360px, 94vw);
+    padding: 24px;
+    display: grid;
+    gap: 20px;
+}
+
+.conversation-menu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.conversation-menu-header h2 {
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+.conversation-menu-header p {
+    margin: 4px 0 0;
     font-size: 0.85rem;
-    cursor: pointer;
-    transition: background 0.2s ease;
+    color: var(--text-muted);
 }
 
-.conversation-menu button:hover {
+.conversation-menu-close {
+    justify-content: center;
+}
+
+.conversation-menu-actions {
+    display: grid;
+    gap: 12px;
+}
+
+.conversation-menu-actions button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid transparent;
     background: var(--sidebar-highlight);
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
-.conversation-menu button.danger {
+.conversation-menu-actions button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px rgba(99, 102, 241, 0.25);
+    background: var(--user-bg);
+    color: #fff;
+}
+
+.conversation-menu-actions button.danger {
+    background: rgba(220, 38, 38, 0.12);
+    color: #b91c1c;
+}
+
+.conversation-menu-actions button.danger:hover {
+    background: #dc2626;
+    color: #fff;
+    box-shadow: 0 16px 32px rgba(220, 38, 38, 0.35);
+}
+
+.conversation-rename-form {
+    display: grid;
+    gap: 10px;
+}
+
+.conversation-rename-form input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--input-border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    font-size: 14px;
+    transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+.conversation-rename-form input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.conversation-rename-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.conversation-rename-actions button {
+    flex: 0 0 auto;
+    padding: 10px 16px;
+    border-radius: 12px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.conversation-rename-actions button[type="button"] {
+    background: var(--sidebar-highlight);
+    color: var(--text-primary);
+}
+
+.conversation-rename-actions button[type="submit"] {
+    background: var(--user-bg);
+    color: #fff;
+}
+
+.conversation-rename-actions button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.conversation-rename-error {
     color: #dc2626;
+    font-size: 13px;
+    font-weight: 600;
 }
 
 .sidebar-resizer {
@@ -395,20 +618,37 @@ body {
 .utility-meta dl {
     margin: 0;
     display: grid;
-    gap: 8px;
+    gap: 6px;
 }
 
-.utility-meta dt {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+.utility-meta-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.utility-meta-row dt {
+    margin: 0;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: inherit;
+}
+
+.utility-meta-row dt::after {
+    content: ":";
+    margin-left: 4px;
     color: var(--text-muted);
 }
 
-.utility-meta dd {
+.utility-meta-row dd {
     margin: 0;
-    font-size: 0.9rem;
     color: var(--text-primary);
+    font-weight: 500;
+    font-size: inherit;
+    word-break: break-all;
 }
 
 .chat-top {
@@ -462,6 +702,24 @@ body {
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.chat-tools .chat-login {
+    padding: 8px 16px;
+}
+
+.sidebar-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sidebar-title-logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
 }
 
 .badge {
@@ -903,6 +1161,11 @@ body {
 .modal-card h2 {
     margin: 0;
     font-size: 1.3rem;
+}
+
+.modal-card form {
+    display: grid;
+    gap: 16px;
 }
 
 .auth-card {
