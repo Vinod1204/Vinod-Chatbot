@@ -717,7 +717,7 @@ async def google_oauth_callback(request: Request):
 
     try:
         user_response = _upsert_oauth_user(
-            "google", userinfo, allow_create=False)
+            "google", userinfo, allow_create=True)
     except HTTPException as exc:
         return _oauth_popup_response("google", success=False, message=str(exc.detail), return_url=return_url)
     except PyMongoError as exc:  # pragma: no cover - database errors

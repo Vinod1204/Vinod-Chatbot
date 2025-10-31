@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { FileDown, MessageSquare, MoreVertical, Pencil, Plus, Share2, Trash2, X } from "lucide-react";
+import { FileDown, MoreVertical, Pencil, Plus, Share2, Trash2, X } from "lucide-react";
 import brandLogo from "../../ConvoGPT.png";
 import type { ConversationSummary } from "../types";
 
@@ -14,6 +14,7 @@ type SidebarProps = {
     onSaveAsPdf: (conversationId: string) => void;
     onRename: (conversationId: string, title: string) => Promise<void> | void;
     formatTitle: (value: string) => string;
+    onClose?: () => void;
 };
 
 export function ConversationSidebar({
@@ -26,6 +27,7 @@ export function ConversationSidebar({
     onSaveAsPdf,
     onRename,
     formatTitle,
+    onClose,
 }: SidebarProps) {
     const [menuConversationId, setMenuConversationId] = useState<string | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
@@ -111,20 +113,23 @@ export function ConversationSidebar({
                     <img src={brandLogo} alt="ConvoGPT logo" className="sidebar-title-logo" />
                     <div className="sidebar-title">Conversations</div>
                 </div>
-                <button type="button" className="create-button" onClick={onCreate}>
-                    <Plus size={16} /> New
-                </button>
+                <div className="sidebar-header-actions">
+                    <button type="button" className="create-button" onClick={onCreate}>
+                        <Plus size={16} /> New
+                    </button>
+                    {onClose ? (
+                        <button
+                            type="button"
+                            className="icon-button sidebar-close"
+                            onClick={onClose}
+                            aria-label="Close conversations panel"
+                        >
+                            <X size={16} />
+                        </button>
+                    ) : null}
+                </div>
             </div>
             <div className="conversation-list" role="list">
-                {conversations.length === 0 && (
-                    <div className="empty-state" role="status">
-                        <MessageSquare size={28} />
-                        <div>
-                            <h2>No conversations yet</h2>
-                            <p>Create a new thread to start chatting with your assistant.</p>
-                        </div>
-                    </div>
-                )}
                 {conversations.map((conversation) => (
                     <div
                         key={conversation.conversationId}

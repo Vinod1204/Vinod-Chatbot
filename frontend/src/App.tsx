@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Message, useChat } from "ai/react";
 import {
     Calculator,
@@ -182,9 +182,6 @@ export default function App() {
         }
         return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     });
-    const shellRef = useRef<HTMLDivElement | null>(null);
-    const [sidebarWidth, setSidebarWidth] = useState(320);
-    const [isResizing, setIsResizing] = useState(false);
     const [isCompactLayout, setIsCompactLayout] = useState(() =>
         typeof window === "undefined" ? false : window.innerWidth < 960,
     );
@@ -316,6 +313,12 @@ export default function App() {
     }, [currentUser]);
 
     useEffect(() => {
+        if (!isSidebarOpen) {
+            setIsAccountPanelOpen(false);
+        }
+    }, [isSidebarOpen]);
+
+    useEffect(() => {
         if (showAuthDialog) {
             setAuthError(null);
         }
@@ -332,6 +335,14 @@ export default function App() {
         }
         setTemporaryConversationId(null);
     }, [currentConversation, currentUser]);
+
+    useEffect(() => {
+        if (!currentUser) {
+            setIsSidebarOpen(false);
+            return;
+        }
+        setIsSidebarOpen(!isCompactLayout);
+    }, [currentUser, isCompactLayout]);
 
     useEffect(() => {
         if (typeof window === "undefined" || typeof document === "undefined") {
@@ -403,43 +414,19 @@ export default function App() {
     }, []);
 
     useEffect(() => {
-        if (isCompactLayout) {
-            setIsResizing(false);
-            setIsSidebarOpen(false);
-        }
-    }, [isCompactLayout]);
-
-    const handleResizerMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-        if (isCompactLayout) {
+        if (!isSidebarOpen) {
             return;
         }
-        event.preventDefault();
-        setIsResizing(true);
-    }, [isCompactLayout]);
-
-    useEffect(() => {
-        if (!isResizing) {
-            return;
-        }
-        const handleMouseMove = (event: MouseEvent) => {
-            if (!shellRef.current) {
-                return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setIsSidebarOpen(false);
             }
-            const rect = shellRef.current.getBoundingClientRect();
-            const rawWidth = event.clientX - rect.left;
-            const minWidth = 220;
-            const maxWidth = Math.min(420, rect.width - 260);
-            const nextWidth = Math.max(minWidth, Math.min(maxWidth, rawWidth));
-            setSidebarWidth(nextWidth);
         };
-        const stopResize = () => setIsResizing(false);
-        document.addEventListener("mousemove", handleMouseMove);
-        document.addEventListener("mouseup", stopResize);
+        document.addEventListener("keydown", handleKeyDown);
         return () => {
-            document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", stopResize);
+            document.removeEventListener("keydown", handleKeyDown);
         };
-    }, [isResizing]);
+    }, [isSidebarOpen]);
 
     useEffect(() => {
         return () => {
@@ -539,7 +526,6 @@ export default function App() {
 
     useEffect(() => {
         if (!currentUser) {
-            setIsSidebarOpen(false);
             if (!currentConversation) {
                 const placeholder: ConversationDetail = {
                     conversationId: "temporary",
@@ -556,7 +542,6 @@ export default function App() {
             }
             return;
         }
-        setIsSidebarOpen(true);
         if (currentConversation?.conversationId === "temporary") {
             setCurrentConversation(null);
             setMessages([]);
@@ -1338,14 +1323,16 @@ export default function App() {
 
     return (
         <div className="app-page">
-            <div className="app-shell" ref={shellRef}>
+            <div className="app-shell">
                 {currentUser ? (
-                    <div
-                        className={clsx("sidebar-container", { collapsed: !isSidebarOpen })}
-                        style={isSidebarOpen && !isCompactLayout ? { width: sidebarWidth } : undefined}
-                        aria-hidden={!isSidebarOpen}
-                    >
-                        {isSidebarOpen ? (
+                    <>
+                        <div
+                            className={clsx("sidebar-container", {
+                                open: isSidebarOpen,
+                                compact: isCompactLayout,
+                            })}
+                            aria-hidden={!isSidebarOpen}
+                        >
                             <div className="sidebar-content">
                                 <ConversationSidebar
                                     conversations={conversations}
@@ -1367,6 +1354,7 @@ export default function App() {
                                     }}
                                     onRename={handleRenameConversation}
                                     formatTitle={normaliseTitle}
+                                    onClose={() => setIsSidebarOpen(false)}
                                 />
                                 <div className="sidebar-footer">
                                     <button
@@ -1407,17 +1395,16 @@ export default function App() {
                                     ) : null}
                                 </div>
                             </div>
+                        </div>
+                        {isSidebarOpen ? (
+                            <div
+                                className="sidebar-backdrop"
+                                role="presentation"
+                                aria-hidden="true"
+                                onClick={() => setIsSidebarOpen(false)}
+                            />
                         ) : null}
-                    </div>
-                ) : null}
-                {!isCompactLayout && isSidebarOpen ? (
-                    <div
-                        className={clsx("sidebar-resizer", { dragging: isResizing })}
-                        onMouseDown={handleResizerMouseDown}
-                        role="separator"
-                        aria-orientation="vertical"
-                        aria-label="Resize conversations panel"
-                    />
+                    </>
                 ) : null}
                 <section className="chat-card">
                     {isUtilitiesOpen ? (
