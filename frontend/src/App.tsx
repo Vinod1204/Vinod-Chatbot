@@ -1238,9 +1238,75 @@ export default function App() {
         if (genderFallback) {
             return genderFallback;
         }
-        const englishFallback = voices.find((voice) => voice.lang.toLowerCase().startsWith("en"));
-        return englishFallback ?? voices[0];
+        // Prefer an English voice when no gendered match was found.
+        const englishFallback = voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("en"));
+        // As a final heuristic, prefer voices that include region hints often used for male voices on mobile
+        const mobileMaleHint = voiceGender === "male" ? voices.find((v) => /alex|us|en-?us|google/i.test(v.name)) : null;
+        return englishFallback ?? mobileMaleHint ?? voices[0];
     }, [voices, voiceGender]);
+
+    // Speak text with an automatic fallback: if speaking with a selected voice errors,
+    // retry once without specifying a voice (some mobile browsers fail when a specific
+    // voice object is assigned).
+    const speakWithFallback = useCallback(
+        (text: string, voice?: SpeechSynthesisVoice, onEnd?: () => void, onError?: () => void) => {
+            if (!speechSupported || typeof window === "undefined" || !window.speechSynthesis) {
+                onError?.();
+                return;
+            }
+            const synth = window.speechSynthesis;
+            synth.cancel();
+            let retried = false;
+
+            const makeUtterance = (useVoice: boolean) => {
+                const u = new SpeechSynthesisUtterance(text);
+                if (useVoice && voice) {
+                    try {
+                        u.voice = voice;
+                    } catch (_e) {
+                        // ignore assignment errors and fall back below
+                    }
+                }
+                u.onend = () => {
+                    onEnd?.();
+                };
+                u.onerror = () => {
+                    if (!retried && useVoice) {
+                        retried = true;
+                        // try again without a specific voice
+                        const u2 = makeUtterance(false);
+                        try {
+                            synth.speak(u2);
+                        } catch (_err) {
+                            onError?.();
+                        }
+                        return;
+                    }
+                    onError?.();
+                };
+                return u;
+            };
+
+            const utterance = makeUtterance(true);
+            try {
+                synth.speak(utterance);
+            } catch (_err) {
+                // final fallback: try without voice
+                if (!retried) {
+                    retried = true;
+                    const u2 = makeUtterance(false);
+                    try {
+                        synth.speak(u2);
+                    } catch (_err2) {
+                        onError?.();
+                    }
+                } else {
+                    onError?.();
+                }
+            }
+        },
+        [speechSupported],
+    );
 
     const handleSpeakTranscript = useCallback(() => {
         if (!speechSupported || typeof window === "undefined" || !window.speechSynthesis) {
@@ -1251,25 +1317,22 @@ export default function App() {
             setToast({ type: "error", message: "There is no conversation to narrate yet." });
             return;
         }
-        const synth = window.speechSynthesis;
-        synth.cancel();
-        const utterance = new SpeechSynthesisUtterance(transcript);
         const voice = pickVoice();
-        if (voice) {
-            utterance.voice = voice;
-        }
-        utterance.onend = () => {
-            setIsNarratingConversation(false);
-            setSpeakingMessageId(null);
-        };
-        utterance.onerror = () => {
-            setIsNarratingConversation(false);
-            setSpeakingMessageId(null);
-        };
         setToast(null);
         setIsNarratingConversation(true);
         setSpeakingMessageId(null);
-        synth.speak(utterance);
+        speakWithFallback(
+            transcript,
+            voice ?? undefined,
+            () => {
+                setIsNarratingConversation(false);
+                setSpeakingMessageId(null);
+            },
+            () => {
+                setIsNarratingConversation(false);
+                setSpeakingMessageId(null);
+            },
+        );
     }, [pickVoice, speechSupported, setToast, transcript]);
 
     const handleStopSpeaking = useCallback(() => {
@@ -1292,25 +1355,22 @@ export default function App() {
                 setToast({ type: "error", message: "Nothing to narrate for this reply yet." });
                 return;
             }
-            const synth = window.speechSynthesis;
-            synth.cancel();
-            const utterance = new SpeechSynthesisUtterance(trimmed);
             const voice = pickVoice();
-            if (voice) {
-                utterance.voice = voice;
-            }
-            utterance.onend = () => {
-                setSpeakingMessageId(null);
-                setIsNarratingConversation(false);
-            };
-            utterance.onerror = () => {
-                setSpeakingMessageId(null);
-                setIsNarratingConversation(false);
-            };
             setToast(null);
             setIsNarratingConversation(false);
             setSpeakingMessageId(messageId);
-            synth.speak(utterance);
+            speakWithFallback(
+                trimmed,
+                voice ?? undefined,
+                () => {
+                    setSpeakingMessageId(null);
+                    setIsNarratingConversation(false);
+                },
+                () => {
+                    setSpeakingMessageId(null);
+                    setIsNarratingConversation(false);
+                },
+            );
         },
         [pickVoice, speechSupported, setToast],
     );
