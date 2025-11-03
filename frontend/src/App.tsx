@@ -1,11 +1,12 @@
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Message, useChat } from "ai/react";
 import {
-    Calculator,
+    Bug,
     ChevronDown,
     Mic,
     MicOff,
     Loader2,
+    LogIn,
     Moon,
     PanelLeftClose,
     PanelLeftOpen,
@@ -16,6 +17,7 @@ import {
     Sun,
     Volume2,
     StopCircle,
+    UserRound,
     X,
 } from "lucide-react";
 import clsx from "clsx";
@@ -23,10 +25,13 @@ import {
     createConversation,
     deleteConversation,
     getConversation,
+    getSharedConversation,
     listConversations,
     renameConversation as renameConversationRequest,
+    claimSharedConversation,
     loginUser,
     signupUser,
+    submitBugReport,
 } from "./api";
 import type {
     ConversationDetail,
@@ -36,10 +41,11 @@ import type {
 import { loadStoredUser, saveStoredUser, clearStoredUser, ensureGuestId, loadGuestId } from "./auth";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { MessageBubble } from "./components/MessageBubble";
-import { CalculatorPanel } from "./components/CalculatorPanel";
 import { AuthDialog } from "./components/AuthDialog";
+import { BugReportDialog } from "./components/BugReportDialog";
 import { API_ROOT } from "./config";
 import brandLogo from "../ConvoGPT.png";
+import type { BugReportPayload } from "./components/BugReportDialog";
 const API_BASE = API_ROOT;
 const USER_ID_HEADER = "x-user-id";
 const THEME_STORAGE_KEY = "convogpt-theme";
@@ -63,28 +69,6 @@ const FEMALE_VOICE_HINTS = [
     "natalie",
     "linda",
     "siri",
-];
-const MALE_VOICE_HINTS = [
-    "male",
-    "david",
-    "guy",
-    "matthew",
-    "brian",
-    "joey",
-    "kevin",
-    "stephen",
-    "justin",
-    "liam",
-    "oliver",
-    "roger",
-    "alloy",
-    "alex",
-    "fred",
-    "daniel",
-    "arthur",
-    "george",
-    "ralph",
-    "henry",
 ];
 
 const COMPOSER_MIN_HEIGHT = 56;
@@ -144,8 +128,9 @@ export default function App() {
     const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
     const [currentConversation, setCurrentConversation] = useState<ConversationDetail | null>(null);
     const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
-    const [showCalculator, setShowCalculator] = useState(false);
-    const [voiceGender, setVoiceGender] = useState<"female" | "male">("female");
+    const [showBugReportDialog, setShowBugReportDialog] = useState(false);
+    const [bugReportBusy, setBugReportBusy] = useState(false);
+    const [bugReportError, setBugReportError] = useState<string | null>(null);
     const [isNarratingConversation, setIsNarratingConversation] = useState(false);
     const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
     const [speechSupported, setSpeechSupported] = useState(false);
@@ -159,6 +144,18 @@ export default function App() {
         typeof window === "undefined" ? null : loadGuestId(),
     );
     const [temporaryConversationId, setTemporaryConversationId] = useState<string | null>(null);
+    const [sharedConversationSourceId, setSharedConversationSourceId] = useState<string | null>(() => {
+        if (typeof window === "undefined") {
+            return null;
+        }
+        const params = new URLSearchParams(window.location.search);
+        const candidate = params.get("conversation");
+        return candidate && candidate.trim() ? candidate.trim() : null;
+    });
+    const [sharedConversationLoading, setSharedConversationLoading] = useState(false);
+    const [sharedConversationState, setSharedConversationState] = useState<
+        "idle" | "preview" | "saving" | "saved" | "error"
+    >(sharedConversationSourceId ? "preview" : "idle");
     const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
     const [authBusy, setAuthBusy] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
@@ -187,6 +184,7 @@ export default function App() {
     );
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const voiceSeedRef = useRef("");
+    const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
     const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
     const voiceRetryRef = useRef<number | null>(null);
     const authStatusRef = useRef<HTMLButtonElement | null>(null);
@@ -195,6 +193,7 @@ export default function App() {
     const messageScrollRef = useRef<HTMLDivElement | null>(null);
     const lastRenderedMessageIdRef = useRef<string | null>(null);
     const [showScrollControl, setShowScrollControl] = useState(false);
+    const sharedDismissTimerRef = useRef<number | null>(null);
 
     const isTemporaryChat = !currentUser;
 
@@ -250,6 +249,56 @@ export default function App() {
         },
         [currentUser, guestId, temporaryConversationId],
     );
+
+    const clearSharedConversationParam = useCallback(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+        const url = new URL(window.location.href);
+        if (!url.searchParams.has("conversation")) {
+            return;
+        }
+        url.searchParams.delete("conversation");
+        const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+        window.history.replaceState(null, "", nextUrl);
+    }, []);
+
+    const handleDismissSharedPreview = useCallback(() => {
+        if (sharedDismissTimerRef.current !== null) {
+            window.clearTimeout(sharedDismissTimerRef.current);
+            sharedDismissTimerRef.current = null;
+        }
+        setSharedConversationState("idle");
+        setSharedConversationSourceId(null);
+        clearSharedConversationParam();
+        setSharedConversationLoading(false);
+        if (!currentUser) {
+            setCurrentConversation(null);
+            setMessages([]);
+        }
+    }, [clearSharedConversationParam, currentUser, setMessages]);
+
+    const scheduleSharedConversationDismiss = useCallback(() => {
+        if (typeof window === "undefined") {
+            handleDismissSharedPreview();
+            return;
+        }
+        if (sharedDismissTimerRef.current !== null) {
+            window.clearTimeout(sharedDismissTimerRef.current);
+        }
+        sharedDismissTimerRef.current = window.setTimeout(() => {
+            handleDismissSharedPreview();
+        }, 4000);
+    }, [handleDismissSharedPreview]);
+
+    useEffect(() => {
+        return () => {
+            if (sharedDismissTimerRef.current !== null) {
+                window.clearTimeout(sharedDismissTimerRef.current);
+                sharedDismissTimerRef.current = null;
+            }
+        };
+    }, []);
 
     const handleToggleAccountPanel = useCallback(() => {
         setIsAccountPanelOpen((prev) => !prev);
@@ -329,12 +378,16 @@ export default function App() {
             setTemporaryConversationId(null);
             return;
         }
+        if (sharedConversationSourceId) {
+            setTemporaryConversationId(null);
+            return;
+        }
         if (currentConversation && currentConversation.conversationId !== "temporary") {
             setTemporaryConversationId(currentConversation.conversationId);
             return;
         }
         setTemporaryConversationId(null);
-    }, [currentConversation, currentUser]);
+    }, [currentConversation, currentUser, sharedConversationSourceId]);
 
     useEffect(() => {
         if (!currentUser) {
@@ -473,11 +526,85 @@ export default function App() {
         setIsUtilitiesOpen(false);
     }, [currentConversation?.conversationId]);
 
+    useEffect(() => {
+        if (!sharedConversationSourceId) {
+            return;
+        }
+        let cancelled = false;
+
+        const loadConversation = async () => {
+            setSharedConversationLoading(true);
+
+            if (currentUser?.userId) {
+                try {
+                    const existing = await getConversation(sharedConversationSourceId);
+                    if (cancelled) {
+                        return;
+                    }
+                    setConversations((prev: ConversationSummary[]) => summariseConversation(prev, existing));
+                    setCurrentConversation(existing);
+                    setMessages(toMessages(existing));
+                    setActiveConversationId(existing.conversationId);
+                    handleDismissSharedPreview();
+                    return;
+                } catch (error) {
+                    if (cancelled) {
+                        return;
+                    }
+                    const message = error instanceof Error ? error.message : String(error);
+                    if (message && message !== "Conversation not found") {
+                        setToast({ type: "error", message });
+                    }
+                }
+            }
+
+            setSharedConversationState((prev) => (prev === "saved" ? prev : "preview"));
+            setActiveConversationId(null);
+            try {
+                const detail = await getSharedConversation(sharedConversationSourceId);
+                if (cancelled) {
+                    return;
+                }
+                setCurrentConversation(detail);
+                setMessages(toMessages(detail));
+            } catch (error) {
+                if (cancelled) {
+                    return;
+                }
+                const message = error instanceof Error ? error.message : String(error);
+                setToast({ type: "error", message: message || "Could not open shared conversation." });
+                setSharedConversationState("error");
+                handleDismissSharedPreview();
+            } finally {
+                if (!cancelled) {
+                    setSharedConversationLoading(false);
+                }
+            }
+        };
+
+        void loadConversation();
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        currentUser?.userId,
+        getConversation,
+        getSharedConversation,
+        handleDismissSharedPreview,
+        setConversations,
+        setMessages,
+        setToast,
+        sharedConversationSourceId,
+    ]);
+
     const handleSelectConversation = useCallback(
         async (conversationId: string) => {
             if (!currentUser?.userId) {
                 ensureAuthenticated();
                 return;
+            }
+            if (sharedConversationSourceId) {
+                handleDismissSharedPreview();
             }
             setActiveConversationId(conversationId);
             setToast(null);
@@ -493,8 +620,51 @@ export default function App() {
                 setToast({ type: "error", message });
             }
         },
-        [currentUser?.userId, ensureAuthenticated, isCompactLayout, setMessages],
+        [
+            currentUser?.userId,
+            ensureAuthenticated,
+            isCompactLayout,
+            handleDismissSharedPreview,
+            setMessages,
+            sharedConversationSourceId,
+        ],
     );
+
+    const handleSaveSharedConversation = useCallback(async () => {
+        if (
+            !currentUser?.userId ||
+            !sharedConversationSourceId ||
+            sharedConversationLoading ||
+            sharedConversationState === "saving" ||
+            sharedConversationState === "saved"
+        ) {
+            return;
+        }
+        setSharedConversationState("saving");
+        try {
+            const detail = await claimSharedConversation(sharedConversationSourceId);
+            setConversations((prev: ConversationSummary[]) => summariseConversation(prev, detail));
+            setCurrentConversation(detail);
+            setMessages(toMessages(detail));
+            setActiveConversationId(detail.conversationId);
+            setToast({ type: "success", message: "Conversation saved to your history." });
+            setSharedConversationState("saved");
+            scheduleSharedConversationDismiss();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setToast({ type: "error", message });
+            setSharedConversationState("preview");
+        }
+    }, [
+        currentUser?.userId,
+        scheduleSharedConversationDismiss,
+        setConversations,
+        setMessages,
+        setToast,
+        sharedConversationLoading,
+        sharedConversationSourceId,
+        sharedConversationState,
+    ]);
 
     const refreshConversations = useCallback(async () => {
         if (!currentUser?.userId) {
@@ -510,6 +680,9 @@ export default function App() {
                 setMessages([]);
                 return;
             }
+            if (sharedConversationSourceId) {
+                return;
+            }
             const activeId = activeConversationId;
             if (!activeId || !list.some((item) => item.conversationId === activeId)) {
                 await handleSelectConversation(list[0].conversationId);
@@ -518,7 +691,13 @@ export default function App() {
             const message = error instanceof Error ? error.message : String(error);
             setToast({ type: "error", message });
         }
-    }, [activeConversationId, currentUser?.userId, handleSelectConversation, setMessages]);
+    }, [
+        activeConversationId,
+        currentUser?.userId,
+        handleSelectConversation,
+        setMessages,
+        sharedConversationSourceId,
+    ]);
 
     useEffect(() => {
         void refreshConversations();
@@ -552,6 +731,10 @@ export default function App() {
         async (announce: boolean = true): Promise<ConversationDetail | null> => {
             if (!ensureAuthenticated()) {
                 return null;
+            }
+
+            if (sharedConversationSourceId) {
+                handleDismissSharedPreview();
             }
 
             const draftConversation = conversations.find((item) => item.messageCount === 0);
@@ -596,7 +779,14 @@ export default function App() {
                 return null;
             }
         },
-        [conversations, currentConversation, ensureAuthenticated, setMessages],
+        [
+            conversations,
+            currentConversation,
+            ensureAuthenticated,
+            handleDismissSharedPreview,
+            setMessages,
+            sharedConversationSourceId,
+        ],
     );
 
     const handleDeleteConversation = useCallback(
@@ -1036,7 +1226,15 @@ export default function App() {
     }, []);
 
     const submitMessage = useCallback(async () => {
-        if (isLoading) {
+        if (isLoading || sharedConversationLoading || sharedConversationState === "saving") {
+            return;
+        }
+        if (sharedConversationSourceId && sharedConversationState !== "saved") {
+            if (currentUser?.userId) {
+                setToast({ type: "error", message: "Save this shared conversation to your history before continuing." });
+            } else {
+                setToast({ type: "error", message: "Sign in to save this shared conversation before continuing." });
+            }
             return;
         }
         const trimmed = input.trim();
@@ -1079,7 +1277,25 @@ export default function App() {
             setToast({ type: "error", message });
             setInput(trimmed);
         }
-    }, [activeConversationId, append, currentUser?.userId, ensureAuthenticated, getConversation, guestId, input, isLoading, isVoiceSearching, setInput, setMessages, startNewConversation, stopVoiceSearch]);
+    }, [
+        activeConversationId,
+        append,
+        currentUser?.userId,
+        ensureAuthenticated,
+        getConversation,
+        guestId,
+        input,
+        isLoading,
+        isVoiceSearching,
+        setInput,
+        setMessages,
+        sharedConversationLoading,
+        sharedConversationSourceId,
+        sharedConversationState,
+        startNewConversation,
+        stopVoiceSearch,
+        setToast,
+    ]);
 
     const handleSendMessage = useCallback(
         async (event: FormEvent<HTMLFormElement>) => {
@@ -1190,6 +1406,37 @@ export default function App() {
 
     const statusMessage = toast?.message ?? null;
     const statusClass = toast?.type === "error" ? "danger" : undefined;
+    const sharedPreviewActive = sharedConversationSourceId !== null;
+    const isSharedConversationSaving = sharedConversationState === "saving";
+    const sharedBannerMessage = !sharedPreviewActive
+        ? ""
+        : currentUser
+            ? isSharedConversationSaving
+                ? "Saving this shared conversation to your history..."
+                : sharedConversationState === "saved"
+                    ? "Conversation saved to your history. Closing shortly."
+                    : "Previewing a shared conversation. Save it to your history?"
+            : "Previewing a shared conversation. Sign in to save it to your history.";
+    const canSaveSharedConversation =
+        Boolean(currentUser?.userId) &&
+        !sharedConversationLoading &&
+        !isSharedConversationSaving &&
+        sharedConversationState !== "saved";
+    const isComposerDisabled =
+        isLoading ||
+        sharedConversationLoading ||
+        isSharedConversationSaving ||
+        (sharedPreviewActive && sharedConversationState !== "saved");
+
+    useEffect(() => {
+        if (!toast || typeof window === "undefined") {
+            return;
+        }
+        const timeout = window.setTimeout(() => {
+            setToast(null);
+        }, 4000);
+        return () => window.clearTimeout(timeout);
+    }, [toast, setToast]);
 
     const transcript = useMemo(() => {
         if (!currentConversation) {
@@ -1204,21 +1451,24 @@ export default function App() {
     }, [currentConversation]);
 
     useEffect(() => {
-        if (!speechSupported) {
+        if (!speechSupported || typeof window === "undefined" || !window.speechSynthesis) {
             return;
+        }
+        if (activeUtteranceRef.current) {
+            activeUtteranceRef.current.onend = null;
+            activeUtteranceRef.current.onerror = null;
+            activeUtteranceRef.current = null;
         }
         window.speechSynthesis.cancel();
         setIsNarratingConversation(false);
         setSpeakingMessageId(null);
-    }, [currentConversation?.conversationId, speechSupported]);
+    }, [activeUtteranceRef, currentConversation?.conversationId, speechSupported]);
 
     const pickVoice = useCallback(() => {
         if (voices.length === 0) {
             return null;
         }
-        const hints = (voiceGender === "female" ? FEMALE_VOICE_HINTS : MALE_VOICE_HINTS).map((hint) =>
-            hint.toLowerCase(),
-        );
+        const hints = FEMALE_VOICE_HINTS.map((hint) => hint.toLowerCase());
         const desired = voices.find((voice) => {
             const lower = voice.name.toLowerCase();
             const uri = (voice as SpeechSynthesisVoice & { voiceURI?: string }).voiceURI?.toLowerCase() ?? "";
@@ -1227,23 +1477,17 @@ export default function App() {
         if (desired) {
             return desired;
         }
-        const genderFallback = voices.find((voice) => {
+        const femaleFallback = voices.find((voice) => {
             const lower = voice.name.toLowerCase();
             const uri = (voice as SpeechSynthesisVoice & { voiceURI?: string }).voiceURI?.toLowerCase() ?? "";
-            if (voiceGender === "male") {
-                return lower.includes("male") || uri.includes("male");
-            }
             return lower.includes("female") || uri.includes("female");
         });
-        if (genderFallback) {
-            return genderFallback;
+        if (femaleFallback) {
+            return femaleFallback;
         }
-        // Prefer an English voice when no gendered match was found.
         const englishFallback = voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("en"));
-        // As a final heuristic, prefer voices that include region hints often used for male voices on mobile
-        const mobileMaleHint = voiceGender === "male" ? voices.find((v) => /alex|us|en-?us|google/i.test(v.name)) : null;
-        return englishFallback ?? mobileMaleHint ?? voices[0];
-    }, [voices, voiceGender]);
+        return englishFallback ?? voices[0];
+    }, [voices]);
 
     // Speak text with an automatic fallback: if speaking with a selected voice errors,
     // retry once without specifying a voice (some mobile browsers fail when a specific
@@ -1255,57 +1499,60 @@ export default function App() {
                 return;
             }
             const synth = window.speechSynthesis;
+            if (activeUtteranceRef.current) {
+                activeUtteranceRef.current.onend = null;
+                activeUtteranceRef.current.onerror = null;
+                activeUtteranceRef.current = null;
+            }
             synth.cancel();
             let retried = false;
 
-            const makeUtterance = (useVoice: boolean) => {
-                const u = new SpeechSynthesisUtterance(text);
+            const speakUtterance = (useVoice: boolean): void => {
+                const utterance = new SpeechSynthesisUtterance(text);
                 if (useVoice && voice) {
                     try {
-                        u.voice = voice;
+                        utterance.voice = voice;
                     } catch (_e) {
                         // ignore assignment errors and fall back below
                     }
                 }
-                u.onend = () => {
+                utterance.onend = () => {
+                    if (activeUtteranceRef.current === utterance) {
+                        activeUtteranceRef.current = null;
+                    }
                     onEnd?.();
                 };
-                u.onerror = () => {
+                utterance.onerror = () => {
+                    if (activeUtteranceRef.current === utterance) {
+                        activeUtteranceRef.current = null;
+                    }
                     if (!retried && useVoice) {
                         retried = true;
-                        // try again without a specific voice
-                        const u2 = makeUtterance(false);
-                        try {
-                            synth.speak(u2);
-                        } catch (_err) {
-                            onError?.();
-                        }
+                        speakUtterance(false);
                         return;
                     }
                     onError?.();
                 };
-                return u;
-            };
 
-            const utterance = makeUtterance(true);
-            try {
-                synth.speak(utterance);
-            } catch (_err) {
-                // final fallback: try without voice
-                if (!retried) {
-                    retried = true;
-                    const u2 = makeUtterance(false);
-                    try {
-                        synth.speak(u2);
-                    } catch (_err2) {
+                activeUtteranceRef.current = utterance;
+                try {
+                    synth.speak(utterance);
+                } catch (_err) {
+                    if (activeUtteranceRef.current === utterance) {
+                        activeUtteranceRef.current = null;
+                    }
+                    if (!retried && useVoice) {
+                        retried = true;
+                        speakUtterance(false);
+                    } else {
                         onError?.();
                     }
-                } else {
-                    onError?.();
                 }
-            }
+            };
+
+            speakUtterance(true);
         },
-        [speechSupported],
+        [activeUtteranceRef, speechSupported],
     );
 
     const handleSpeakTranscript = useCallback(() => {
@@ -1339,10 +1586,15 @@ export default function App() {
         if (!speechSupported || typeof window === "undefined" || !window.speechSynthesis) {
             return;
         }
+        if (activeUtteranceRef.current) {
+            activeUtteranceRef.current.onend = null;
+            activeUtteranceRef.current.onerror = null;
+            activeUtteranceRef.current = null;
+        }
         window.speechSynthesis.cancel();
         setIsNarratingConversation(false);
         setSpeakingMessageId(null);
-    }, [speechSupported]);
+    }, [activeUtteranceRef, speechSupported]);
 
     const handleSpeakMessage = useCallback(
         (messageId: string, content: string) => {
@@ -1375,6 +1627,48 @@ export default function App() {
         [pickVoice, speechSupported, setToast],
     );
 
+    const handleOpenBugReport = useCallback(() => {
+        setBugReportError(null);
+        setShowBugReportDialog(true);
+    }, []);
+
+    const handleCloseBugReport = useCallback(() => {
+        if (bugReportBusy) {
+            return;
+        }
+        setShowBugReportDialog(false);
+        setBugReportError(null);
+    }, [bugReportBusy]);
+
+    const handleSubmitBugReport = useCallback(
+        async (payload: BugReportPayload) => {
+            setBugReportBusy(true);
+            setBugReportError(null);
+            const form = new FormData();
+            form.append("description", payload.description);
+            if (payload.contactEmail) {
+                form.append("contactEmail", payload.contactEmail);
+            }
+            for (const file of payload.files) {
+                form.append("attachments", file);
+            }
+            try {
+                await submitBugReport(form);
+                setToast({ type: "success", message: "Thanks for the report! We'll investigate shortly." });
+                setShowBugReportDialog(false);
+            } catch (error) {
+                const message =
+                    error instanceof Error
+                        ? error.message
+                        : "We couldn't send your report. Please try again.";
+                setBugReportError(message);
+            } finally {
+                setBugReportBusy(false);
+            }
+        },
+        [setToast],
+    );
+
     const toggleTheme = useCallback(() => {
         setTheme((prev) => (prev === "light" ? "dark" : "light"));
     }, []);
@@ -1392,6 +1686,7 @@ export default function App() {
                                 compact: isCompactLayout,
                             })}
                             aria-hidden={!isSidebarOpen}
+                            aria-live="polite"
                         >
                             <div className="sidebar-content">
                                 <ConversationSidebar
@@ -1416,44 +1711,6 @@ export default function App() {
                                     formatTitle={normaliseTitle}
                                     onClose={() => setIsSidebarOpen(false)}
                                 />
-                                <div className="sidebar-footer">
-                                    <button
-                                        type="button"
-                                        className="auth-status-button"
-                                        onClick={handleToggleAccountPanel}
-                                        ref={authStatusRef}
-                                        aria-haspopup="true"
-                                        aria-expanded={isAccountPanelOpen}
-                                    >
-                                        <span className="auth-identity" aria-live="polite">
-                                            {currentUser.name || currentUser.email}
-                                        </span>
-                                        <ChevronDown size={14} aria-hidden="true" />
-                                    </button>
-                                    {isAccountPanelOpen ? (
-                                        <div
-                                            className="account-panel"
-                                            ref={accountPanelRef}
-                                            role="menu"
-                                            aria-label="Account options"
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    void handleLogout();
-                                                }}
-                                            >
-                                                Log out
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={handleSwitchAccount}
-                                            >
-                                                Switch user
-                                            </button>
-                                        </div>
-                                    ) : null}
-                                </div>
                             </div>
                         </div>
                         {isSidebarOpen ? (
@@ -1470,7 +1727,7 @@ export default function App() {
                     {isUtilitiesOpen ? (
                         <aside className="utility-panel" role="complementary" aria-label="Conversation tools">
                             <div className="utility-header">
-                                <h2>Quick tools</h2>
+                                <h2>⚙️ Quick Tools</h2>
                                 <button
                                     type="button"
                                     className="icon-button"
@@ -1481,7 +1738,7 @@ export default function App() {
                                 </button>
                             </div>
                             <div className="utility-section">
-                                <h3>Appearance</h3>
+                                <h3>🎨 Appearance</h3>
                                 <button
                                     type="button"
                                     className="icon-button"
@@ -1489,67 +1746,37 @@ export default function App() {
                                     aria-label="Toggle theme"
                                 >
                                     {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-                                    <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
-                                </button>
-                            </div>
-                            <div className="utility-section">
-                                <h3>Tools</h3>
-                                <button
-                                    type="button"
-                                    className={clsx("icon-button", { active: showCalculator })}
-                                    onClick={() => setShowCalculator((prev) => !prev)}
-                                    aria-label="Toggle calculator"
-                                    aria-pressed={showCalculator}
-                                >
-                                    <Calculator size={18} />
-                                    <span>{showCalculator ? "Hide calculator" : "Show calculator"}</span>
+                                    <span>{theme === "light" ? "Dark Mode" : "Light Mode"}</span>
                                 </button>
                             </div>
                             {speechSupported ? (
                                 <div className="utility-section">
-                                    <h3>Voice</h3>
-                                    <div className="voice-toggle">
-                                        <button
-                                            type="button"
-                                            className={clsx("pill-button", { active: voiceGender === "female" })}
-                                            onClick={() => setVoiceGender("female")}
-                                        >
-                                            Female
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={clsx("pill-button", { active: voiceGender === "male" })}
-                                            onClick={() => setVoiceGender("male")}
-                                        >
-                                            Male
-                                        </button>
-                                    </div>
+                                    <h3>🔊 Voice</h3>
                                     <button
                                         type="button"
                                         className="icon-button speak-button"
                                         onClick={isAnythingSpeaking ? handleStopSpeaking : handleSpeakTranscript}
                                         disabled={!transcript && !isAnythingSpeaking}
+                                        aria-label={isAnythingSpeaking ? "Stop narration" : "Play narration"}
                                     >
                                         {isAnythingSpeaking ? <StopCircle size={18} /> : <Volume2 size={18} />}
                                         <span>{isAnythingSpeaking ? "Stop narration" : "Play narration"}</span>
                                     </button>
                                 </div>
                             ) : null}
-                            {currentConversation ? (
-                                <div className="utility-section utility-meta">
-                                    <h3>Conversation</h3>
-                                    <dl>
-                                        <div className="utility-meta-row">
-                                            <dt>Conversation ID</dt>
-                                            <dd>{currentConversation.conversationId}</dd>
-                                        </div>
-                                        <div className="utility-meta-row">
-                                            <dt>Total messages</dt>
-                                            <dd>{currentConversation.messageCount}</dd>
-                                        </div>
-                                    </dl>
-                                </div>
-                            ) : null}
+                            <div className="utility-section">
+                                <h3>🛠️ Support</h3>
+                                <p className="utility-description">Spot a bug? Help us squash it.</p>
+                                <button
+                                    type="button"
+                                    className="icon-button"
+                                    onClick={handleOpenBugReport}
+                                    aria-label="Report a bug"
+                                >
+                                    <Bug size={18} />
+                                    <span>Report a bug</span>
+                                </button>
+                            </div>
                         </aside>
                     ) : null}
                     <div className="chat-top">
@@ -1603,7 +1830,50 @@ export default function App() {
                                     <Settings2 size={18} />
                                     <span>Settings</span>
                                 </button>
-                                {!currentUser ? (
+                                {currentUser ? (
+                                    <div className="account-control">
+                                        <button
+                                            type="button"
+                                            className="auth-status-button"
+                                            onClick={handleToggleAccountPanel}
+                                            ref={authStatusRef}
+                                            aria-haspopup="true"
+                                            aria-expanded={isAccountPanelOpen}
+                                            aria-label={`Account options for ${currentUser.name || currentUser.email}`}
+                                        >
+                                            <UserRound size={18} aria-hidden="true" />
+                                            <span className="auth-identity">
+                                                {currentUser.name || currentUser.email}
+                                            </span>
+                                            <span className="auth-chevron" aria-hidden="true">
+                                                <ChevronDown size={14} />
+                                            </span>
+                                        </button>
+                                        {isAccountPanelOpen ? (
+                                            <div
+                                                className="account-panel"
+                                                ref={accountPanelRef}
+                                                role="menu"
+                                                aria-label="Account options"
+                                            >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        void handleLogout();
+                                                    }}
+                                                >
+                                                    Log out
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleSwitchAccount}
+                                                >
+                                                    Switch user
+                                                </button>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : (
                                     <button
                                         type="button"
                                         className="auth-trigger chat-login"
@@ -1613,13 +1883,67 @@ export default function App() {
                                         }}
                                         aria-haspopup="dialog"
                                         aria-expanded={showAuthDialog}
+                                        aria-label="Open login dialog"
                                     >
-                                        Log in
+                                        <LogIn size={18} aria-hidden="true" />
+                                        <span className="auth-label">Log in</span>
                                     </button>
-                                ) : null}
+                                )}
                             </div>
                         </header>
                     </div>
+                    {sharedConversationSourceId ? (
+                        <div
+                            className={clsx("shared-conversation-banner", {
+                                loading: sharedConversationLoading,
+                                saving: isSharedConversationSaving,
+                                success: sharedConversationState === "saved",
+                            })}
+                            role="status"
+                            aria-live="polite"
+                        >
+                            <span>{sharedBannerMessage}</span>
+                            <div className="shared-conversation-actions">
+                                {currentUser ? (
+                                    <button
+                                        type="button"
+                                        className="link-button"
+                                        onClick={() => {
+                                            if (canSaveSharedConversation) {
+                                                void handleSaveSharedConversation();
+                                            }
+                                        }}
+                                        disabled={!canSaveSharedConversation}
+                                    >
+                                        {isSharedConversationSaving
+                                            ? "Saving..."
+                                            : sharedConversationState === "saved"
+                                                ? "Saved"
+                                                : "Save to history"}
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="link-button"
+                                        onClick={() => {
+                                            setAuthError(null);
+                                            setShowAuthDialog(true);
+                                        }}
+                                    >
+                                        Sign in
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className="link-button"
+                                    onClick={handleDismissSharedPreview}
+                                    disabled={isSharedConversationSaving}
+                                >
+                                    Close preview
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
                     <div className="message-scroll" ref={messageScrollRef}>
                         {currentConversation ? (
                             renderedMessages.length === 0 ? (
@@ -1636,7 +1960,6 @@ export default function App() {
                                         key={message.id}
                                         message={message}
                                         speechSupported={speechSupported}
-                                        voiceGender={voiceGender}
                                         isSpeaking={speakingMessageId === message.id}
                                         onSpeak={() => handleSpeakMessage(message.id, message.content)}
                                         onStop={handleStopSpeaking}
@@ -1683,7 +2006,7 @@ export default function App() {
                                     onChange={handleComposerChange}
                                     onKeyDown={handleComposerKeyDown}
                                     placeholder="Ask a question or describe a task..."
-                                    disabled={isLoading}
+                                    disabled={isComposerDisabled}
                                     aria-label="Message"
                                     ref={composerTextareaRef}
                                 />
@@ -1702,7 +2025,7 @@ export default function App() {
                                         }}
                                         aria-pressed={isVoiceSearching}
                                         aria-label={isVoiceSearching ? "Stop voice search" : "Start voice search"}
-                                        disabled={isLoading}
+                                        disabled={isComposerDisabled}
                                     >
                                         {isVoiceSearching ? <MicOff size={18} /> : <Mic size={18} />}
                                     </button>
@@ -1710,14 +2033,17 @@ export default function App() {
                                 <button
                                     type="submit"
                                     className={clsx("send-button", "composer-action")}
-                                    disabled={isLoading || input.trim().length === 0}
+                                    disabled={isComposerDisabled || input.trim().length === 0}
                                 >
-                                    {isLoading ? <Loader2 size={18} className="spin" /> : <SendHorizonal size={20} />}
+                                    {isLoading || isSharedConversationSaving ? (
+                                        <Loader2 size={18} className="spin" />
+                                    ) : (
+                                        <SendHorizonal size={20} />
+                                    )}
                                     <span className="send-label">Send</span>
                                 </button>
                             </div>
                         </form>
-                        {showCalculator ? <CalculatorPanel onClose={() => setShowCalculator(false)} /> : null}
                     </div>
                 </section>
             </div >
@@ -1729,6 +2055,14 @@ export default function App() {
                 error={authError}
                 onStayLoggedOut={handleStayLoggedOutChoice}
                 onProviderAuthenticated={handleProviderAuthenticated}
+            />
+            <BugReportDialog
+                open={showBugReportDialog}
+                onClose={handleCloseBugReport}
+                onSubmit={handleSubmitBugReport}
+                isSubmitting={bugReportBusy}
+                error={bugReportError}
+                defaultContactEmail={currentUser?.email ?? null}
             />
         </div >
     );

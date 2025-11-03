@@ -7,7 +7,6 @@ type MessageBubbleProps = {
     message: Message;
     timestamp?: string;
     speechSupported?: boolean;
-    voiceGender?: "female" | "male";
     isSpeaking?: boolean;
     onSpeak?: () => void;
     onStop?: () => void;
@@ -97,7 +96,6 @@ const transformToRichText = (raw: string): string => {
 export function MessageBubble({
     message,
     speechSupported = false,
-    voiceGender = "female",
     isSpeaking = false,
     onSpeak,
     onStop,
@@ -125,7 +123,6 @@ export function MessageBubble({
                 <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
                 {message.role === "assistant" && speechSupported ? (
                     <div className="message-voice-controls">
-                        <span className="voice-pill">{voiceGender === "female" ? "Female" : "Male"} voice</span>
                         <button
                             type="button"
                             className={clsx("message-voice-button", { active: isSpeaking })}

@@ -13,14 +13,18 @@ import json
 import logging
 import os
 import re
+import smtplib
+from copy import deepcopy
+from email.message import EmailMessage
 from html import escape
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pymongo import ReturnDocument
@@ -69,7 +73,10 @@ try:
     from .auth import hash_password, verify_password
     from .db import (
         close_client,
+        ensure_bug_report_indexes,
         ensure_user_indexes,
+        get_bug_report_files_bucket,
+        get_bug_reports_collection,
         get_messages_collection,
         get_users_collection,
     )
@@ -81,7 +88,10 @@ except ImportError:  # pragma: no cover - allows running without Mongo dependenc
         # type: ignore[no-redef]
         from db import (
             close_client,
+            ensure_bug_report_indexes,
             ensure_user_indexes,
+            get_bug_report_files_bucket,
+            get_bug_reports_collection,
             get_messages_collection,
             get_users_collection,
         )
@@ -120,6 +130,18 @@ TRUSTED_PROXY_IPS = {
     if ip.strip()
 }
 
+BUG_REPORT_RECIPIENT = os.getenv("BUG_REPORT_RECIPIENT", "vinodmurugan12@gmail.com").strip()
+BUG_REPORT_SENDER = os.getenv("BUG_REPORT_SENDER", os.getenv("SMTP_USERNAME", "noreply@convogpt.local")).strip()
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+BUG_REPORT_EMAIL_ENABLED = bool(SMTP_HOST and BUG_REPORT_RECIPIENT)
+MAX_BUG_ATTACHMENTS = int(os.getenv("BUG_REPORT_MAX_ATTACHMENTS", "5"))
+MAX_BUG_FILE_SIZE = int(os.getenv("BUG_REPORT_MAX_FILE_SIZE", str(5 * 1024 * 1024)))
+MAX_BUG_TOTAL_SIZE = int(os.getenv("BUG_REPORT_MAX_TOTAL_SIZE", str(20 * 1024 * 1024)))
+
 if not USERS_ENABLED:
     raise RuntimeError(
         "MONGODB_URI must be configured. Conversation history now relies on MongoDB storage.",
@@ -134,6 +156,13 @@ except RuntimeError as exc:  # pragma: no cover - configuration errors
 store = MongoConversationStore(_messages_collection)
 client = create_openai_client()
 bot = Chatbot(client, store, temperature=TEMPERATURE, top_p=TOP_P)
+
+try:
+    _bug_reports_collection = get_bug_reports_collection()
+    _bug_report_files_bucket = get_bug_report_files_bucket()
+    ensure_bug_report_indexes()
+except RuntimeError as exc:  # pragma: no cover - configuration errors
+    raise RuntimeError("Unable to initialise bug report storage") from exc
 
 app = FastAPI(title="Multi-Turn Chatbot API", version="0.1.0")
 app.add_middleware(
@@ -378,6 +407,19 @@ def _owner_id(request: Request, *, fallback_user_id: Optional[str] = None) -> st
         status_code=401, detail="Authentication is required for this action.")
 
 
+def _optional_owner_id(request: Request) -> Optional[str]:
+    header = request.headers.get(USER_ID_HEADER)
+    if header:
+        candidate = header.strip()
+        if candidate:
+            return candidate
+    if hasattr(request, "session"):
+        session_user = request.session.get("user_id")  # type: ignore[attr-defined]
+        if session_user:
+            return str(session_user)
+    return None
+
+
 def _message_to_dict(msg: Message) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "role": msg.role,
@@ -402,6 +444,56 @@ def _conversation_to_dict(conv: Conversation) -> Dict[str, Any]:
         "messageCount": len(conv.messages),
         "messages": [_message_to_dict(msg) for msg in conv.messages],
     }
+
+
+def _send_bug_report_email(
+    report_id: str,
+    description: str,
+    contact_email: Optional[str],
+    owner_id: Optional[str],
+    client_ip: str,
+    user_agent: Optional[str],
+    attachments: List[Dict[str, Any]],
+) -> bool:
+    if not BUG_REPORT_EMAIL_ENABLED or not SMTP_HOST:
+        return False
+    try:
+        message = EmailMessage()
+        message["Subject"] = f"[ConvoGPT] Bug report {report_id}"
+        message["From"] = BUG_REPORT_SENDER or "noreply@convogpt.local"
+        message["To"] = BUG_REPORT_RECIPIENT
+        body_lines = [
+            f"Report ID: {report_id}",
+            f"Submitted by: {owner_id or 'guest'}",
+            f"Contact email: {contact_email or 'not provided'}",
+            f"Client IP: {client_ip}",
+            f"User agent: {user_agent or 'unknown'}",
+            "",
+            "Description:",
+            description,
+        ]
+        message.set_content("\n".join(body_lines))
+        for item in attachments:
+            content_type = item.get("content_type") or "application/octet-stream"
+            maintype, _, subtype = content_type.partition("/")
+            maintype = maintype or "application"
+            subtype = subtype or "octet-stream"
+            message.add_attachment(
+                item["data"],
+                maintype=maintype,
+                subtype=subtype,
+                filename=item.get("filename") or "attachment.bin",
+            )
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            if SMTP_USE_TLS:
+                smtp.starttls()
+            if SMTP_USERNAME:
+                smtp.login(SMTP_USERNAME, SMTP_PASSWORD or "")
+            smtp.send_message(message)
+        return True
+    except Exception:  # pragma: no cover - external service
+        logger.exception("Failed to send bug report email")
+        return False
 
 
 def _ensure_conversation(
@@ -638,6 +730,122 @@ def login_user(payload: UserLoginPayload) -> UserResponse:
     return UserResponse(userId=str(user["_id"]), email=email, name=user.get("name"))
 
 
+@app.post("/api/report-bug")
+async def report_bug(
+    request: Request,
+    description: str = Form(...),
+    contactEmail: Optional[str] = Form(None),
+    attachments: Optional[List[UploadFile]] = File(default=None),
+) -> Dict[str, Any]:
+    trimmed_description = description.strip()
+    if not trimmed_description:
+        raise HTTPException(status_code=400, detail="Description is required.")
+
+    files = attachments or []
+    if len(files) > MAX_BUG_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A maximum of {MAX_BUG_ATTACHMENTS} attachments is allowed.",
+        )
+
+    buffered_files: List[Dict[str, Any]] = []
+    total_bytes = 0
+    for index, upload in enumerate(files, start=1):
+        data = await upload.read()
+        file_size = len(data)
+        if file_size > MAX_BUG_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachment '{upload.filename}' exceeds the {MAX_BUG_FILE_SIZE // (1024 * 1024)} MB limit.",
+            )
+        total_bytes += file_size
+        if total_bytes > MAX_BUG_TOTAL_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachments exceed the {MAX_BUG_TOTAL_SIZE // (1024 * 1024)} MB total limit.",
+            )
+        buffered_files.append(
+            {
+                "filename": upload.filename or f"attachment-{index}",
+                "content_type": upload.content_type or "application/octet-stream",
+                "size": file_size,
+                "data": data,
+            }
+        )
+
+    owner_id = _optional_owner_id(request)
+    contact = contactEmail.strip() if contactEmail else None
+    report_id = uuid4().hex
+    client_ip = _client_ip(request)
+    user_agent = request.headers.get("user-agent")
+
+    stored_file_ids = []
+    attachments_meta: List[Dict[str, Any]] = []
+    try:
+        for buffered in buffered_files:
+            file_id = _bug_report_files_bucket.upload_from_stream(
+                buffered["filename"],
+                BytesIO(buffered["data"]),
+                metadata={
+                    "reportId": report_id,
+                    "ownerId": owner_id,
+                    "contentType": buffered["content_type"],
+                    "size": buffered["size"],
+                },
+            )
+            stored_file_ids.append(file_id)
+            attachments_meta.append(
+                {
+                    "fileId": str(file_id),
+                    "filename": buffered["filename"],
+                    "contentType": buffered["content_type"],
+                    "size": buffered["size"],
+                }
+            )
+    except Exception as exc:  # pragma: no cover - GridFS failure
+        for file_id in stored_file_ids:
+            try:
+                _bug_report_files_bucket.delete(file_id)
+            except Exception:  # pragma: no cover - cleanup best effort
+                logger.warning("Unable to clean up bug report attachment %s", file_id)
+        raise HTTPException(status_code=500, detail="Could not store bug report attachments.") from exc
+
+    document = {
+        "_id": report_id,
+        "reportId": report_id,
+        "description": trimmed_description,
+        "contactEmail": contact,
+        "ownerId": owner_id,
+        "clientIp": client_ip,
+        "userAgent": user_agent,
+        "submittedAt": utc_now(),
+        "attachments": attachments_meta,
+        "totalAttachmentBytes": total_bytes,
+    }
+
+    try:
+        _bug_reports_collection.insert_one(document)
+    except PyMongoError as exc:
+        for file_id in stored_file_ids:
+            try:
+                _bug_report_files_bucket.delete(file_id)
+            except Exception:  # pragma: no cover - cleanup best effort
+                logger.warning("Unable to clean up bug report attachment %s", file_id)
+        raise HTTPException(status_code=500, detail="Could not store your bug report.") from exc
+
+    email_sent = _send_bug_report_email(
+        report_id,
+        trimmed_description,
+        contact,
+        owner_id,
+        client_ip,
+        user_agent,
+        buffered_files,
+    )
+
+    return {"reportId": report_id, "emailSent": email_sent}
+
+
 @app.get("/api/auth/oauth/google/start")
 async def google_oauth_start(request: Request, returnUrl: Optional[str] = None):
     if not _google_login_available():
@@ -820,6 +1028,23 @@ def get_conversation(conversation_id: str, request: Request) -> ConversationDeta
     return ConversationDetail(**_conversation_to_dict(conv))
 
 
+@app.get("/api/shared-conversations/{conversation_id}", response_model=ConversationDetail)
+def preview_shared_conversation(conversation_id: str, request: Request) -> ConversationDetail:
+    _optional_owner_id(request)  # Ensure session access side effects stay consistent
+    try:
+        conv = store.load(conversation_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not load conversation.") from exc
+
+    if not conv.owner:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    return ConversationDetail(**_conversation_to_dict(conv))
+
+
 @app.patch("/api/conversations/{conversation_id}", response_model=ConversationDetail)
 def rename_conversation(
     conversation_id: str, payload: ConversationRename, request: Request
@@ -870,6 +1095,53 @@ def delete_conversation(conversation_id: str, request: Request) -> Response:
         raise HTTPException(
             status_code=500, detail="Could not delete conversation.") from exc
     return Response(status_code=204)
+
+
+@app.post("/api/shared-conversations/{conversation_id}/claim", response_model=ConversationDetail, status_code=201)
+def claim_shared_conversation(conversation_id: str, request: Request) -> ConversationDetail:
+    owner = _owner_id(request)
+    try:
+        source = store.load(conversation_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not load conversation.") from exc
+
+    if not source.owner:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if source.owner == owner:
+        return ConversationDetail(**_conversation_to_dict(source))
+
+    cloned = Conversation(
+        conversation_id=uuid4().hex[:12],
+        title=source.title,
+        model=source.model,
+        system_prompt=source.system_prompt,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+        owner=owner,
+        messages=[
+            Message(
+                role=message.role,
+                content=message.content,
+                timestamp=message.timestamp,
+                metadata=deepcopy(message.metadata),
+                usage=deepcopy(message.usage) if message.usage is not None else None,
+            )
+            for message in source.messages
+        ],
+        participants=deepcopy(source.participants),
+    )
+
+    try:
+        store.save(cloned)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not save conversation.") from exc
+
+    return ConversationDetail(**_conversation_to_dict(cloned))
 
 
 @app.post("/api/conversations/{conversation_id}/messages", response_model=ChatResponse)

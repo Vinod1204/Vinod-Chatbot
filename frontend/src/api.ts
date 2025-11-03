@@ -44,9 +44,10 @@ const authHeaders = (): Record<string, string> => {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const url = `${API_ROOT}${path}`;
     let response: Response;
+    const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
     try {
         const mergedHeaders = {
-            "Content-Type": "application/json",
+            ...(isFormData ? {} : { "Content-Type": "application/json" }),
             ...authHeaders(),
             ...toHeaderRecord(init?.headers),
         };
@@ -91,6 +92,10 @@ export async function getConversation(
     return request<ConversationDetail>(`/api/conversations/${encodeURIComponent(conversationId)}`);
 }
 
+export async function getSharedConversation(conversationId: string): Promise<ConversationDetail> {
+    return request<ConversationDetail>(`/api/shared-conversations/${encodeURIComponent(conversationId)}`);
+}
+
 export async function createConversation(
     payload: CreateConversationPayload = {},
 ): Promise<ConversationDetail> {
@@ -98,6 +103,15 @@ export async function createConversation(
         method: "POST",
         body: JSON.stringify(payload ?? {}),
     });
+}
+
+export async function claimSharedConversation(conversationId: string): Promise<ConversationDetail> {
+    return request<ConversationDetail>(
+        `/api/shared-conversations/${encodeURIComponent(conversationId)}/claim`,
+        {
+            method: "POST",
+        },
+    );
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {
@@ -142,5 +156,12 @@ export async function loginUser(payload: { email: string; password: string }): P
     return request<StoredUser>("/api/auth/login", {
         method: "POST",
         body: JSON.stringify(payload),
+    });
+}
+
+export async function submitBugReport(formData: FormData): Promise<{ reportId: string; emailSent: boolean }> {
+    return request<{ reportId: string; emailSent: boolean }>("/api/report-bug", {
+        method: "POST",
+        body: formData,
     });
 }

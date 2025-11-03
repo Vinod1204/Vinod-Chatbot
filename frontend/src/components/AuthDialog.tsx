@@ -236,9 +236,8 @@ export function AuthDialog({
             key: "google" as const,
             label: `${providerPrefix} Google`,
             onClick: handleGoogleSignIn,
-            disabled: disableForm || !googleReady,
+            disabled: disableForm,
             icon: <GoogleLogo />,
-            note: googleReady ? undefined : "Configure Google OAuth",
         },
     ];
 
@@ -297,7 +296,6 @@ export function AuthDialog({
                         >
                             <span className="provider-icon">{provider.icon}</span>
                             <span className="provider-label">{provider.label}</span>
-                            {provider.note ? <span className="provider-note">{provider.note}</span> : null}
                         </button>
                     ))}
                 </div>
