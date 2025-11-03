@@ -1257,17 +1257,19 @@ export default function App() {
             }
             targetConversationId = detail.conversationId;
         }
-        try {
-            await append(
-                { role: "user", content: trimmed },
-                {
-                    body: {
-                        conversationId: targetConversationId,
-                        userId: currentUser?.userId ?? guestId ?? undefined,
-                    },
+        const payload = { role: "user", content: trimmed } as const;
+        const appendPromise = append(
+            payload,
+            {
+                body: {
+                    conversationId: targetConversationId,
+                    userId: currentUser?.userId ?? guestId ?? undefined,
                 },
-            );
-            setInput("");
+            },
+        );
+        setInput("");
+        try {
+            await appendPromise;
             const detail = await getConversation(targetConversationId);
             setCurrentConversation(detail);
             setMessages(toMessages(detail));
