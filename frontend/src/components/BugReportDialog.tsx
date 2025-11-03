@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ImagePlus, Trash2, X } from "lucide-react";
+import { ImagePlus, Send, Trash2, X } from "lucide-react";
 
 export type BugReportPayload = {
     description: string;
@@ -141,40 +141,38 @@ export function BugReportDialog({
                     <X size={16} />
                 </button>
                 <div className="bug-report-header">
-                    <h2>Report a bug</h2>
-                    <p>
-                        Tell us what happened and what you expected. Screenshots or short clips help us reproduce UI issues much faster.
-                    </p>
+                    <h2>Found a glitch?</h2>
+                    <p>Give us a quick rundown and attach a visual if you have one.</p>
                 </div>
                 <form className="bug-report-body" onSubmit={handleSubmit}>
                     <div className="input-field">
-                        <label htmlFor="bug-description">What happened?</label>
+                        <label htmlFor="bug-description">Describe the issue</label>
                         <textarea
                             id="bug-description"
                             value={description}
                             onChange={(event) => setDescription(event.target.value)}
-                            placeholder="Share what broke, how you got there, and what you expected to see."
+                            placeholder="What went wrong and what were you expecting instead?"
                             rows={6}
                             required
                             disabled={isSubmitting}
                         />
                     </div>
                     <div className="input-field">
-                        <label htmlFor="bug-contact">Contact email (optional)</label>
+                        <label htmlFor="bug-contact">Email (optional)</label>
                         <input
                             id="bug-contact"
                             type="email"
                             value={contactEmail}
                             onChange={(event) => setContactEmail(event.target.value)}
-                            placeholder="We'll reach out if we need more details"
+                            placeholder="We’ll reach out if we need more details"
                             disabled={isSubmitting}
                         />
                     </div>
                     <div className="bug-report-attachments">
                         <div className="bug-report-attachments-header">
-                            <span>Attach screenshots (optional)</span>
+                            <span>Screenshots (optional)</span>
                             <span className="bug-report-hint">
-                                Up to {MAX_ATTACHMENTS} images, {MAX_FILE_SIZE / (1024 * 1024)} MB each. Visuals help us fix UI issues faster.
+                                Up to {MAX_ATTACHMENTS} images · {MAX_FILE_SIZE / (1024 * 1024)} MB each
                             </span>
                         </div>
                         <div className="bug-report-dropzone">
@@ -185,9 +183,9 @@ export function BugReportDialog({
                                 disabled={isSubmitting}
                             >
                                 <ImagePlus size={18} />
-                                <span>Add screenshots</span>
+                                <span>Upload images</span>
                             </button>
-                            <p>Drag & drop files or browse your device.</p>
+                            <p>or drag & drop files here</p>
                             <input
                                 ref={fileInputRef}
                                 type="file"
@@ -223,7 +221,7 @@ export function BugReportDialog({
                         ) : null}
                         {files.length > 0 ? (
                             <div className="bug-report-file-summary">
-                                <span>{files.length === 1 ? "1 file attached" : `${files.length} files attached`}</span>
+                                <span>{files.length === 1 ? "1 file" : `${files.length} files`}</span>
                                 <span>{formatFileSize(totalSize)} total</span>
                             </div>
                         ) : null}
@@ -234,7 +232,8 @@ export function BugReportDialog({
                             Cancel
                         </button>
                         <button type="submit" className="primary-button" disabled={isSubmitting}>
-                            {isSubmitting ? "Sending..." : "Send report"}
+                            <Send size={16} />
+                            <span>{isSubmitting ? "Sending..." : "Send report"}</span>
                         </button>
                     </div>
                 </form>

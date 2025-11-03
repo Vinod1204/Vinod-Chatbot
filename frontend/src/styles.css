@@ -1314,6 +1314,33 @@ body {
     color: #fff;
 }
 
+.primary-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    border-radius: 14px;
+    padding: 10px 20px;
+    background: var(--user-bg);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 12px 30px rgba(99, 102, 241, 0.28);
+    transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.primary-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 36px rgba(99, 102, 241, 0.35);
+}
+
+.primary-button[disabled] {
+    cursor: not-allowed;
+    opacity: 0.75;
+    transform: none;
+    box-shadow: 0 10px 22px rgba(99, 102, 241, 0.18);
+}
+
 .secondary-button {
     background: rgba(148, 163, 184, 0.2);
     border: none;
@@ -1372,9 +1399,9 @@ body {
 
 .bug-report-card {
     position: relative;
-    width: min(560px, 100%);
+    width: min(520px, 100%);
     gap: 20px;
-    padding-top: 48px;
+    padding-top: 44px;
 }
 
 .bug-report-close {
@@ -1385,17 +1412,22 @@ body {
 
 .bug-report-header {
     display: grid;
-    gap: 6px;
+    gap: 8px;
+    color: var(--text-secondary);
+}
+
+.bug-report-header h2 {
+    color: var(--text-primary);
 }
 
 .bug-report-body {
     display: grid;
-    gap: 18px;
+    gap: 16px;
 }
 
 .bug-report-attachments {
     display: grid;
-    gap: 12px;
+    gap: 10px;
 }
 
 .bug-report-attachments-header {
@@ -1406,24 +1438,35 @@ body {
     flex-wrap: wrap;
 }
 
+.bug-report-attachments-header span:first-child {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
 .bug-report-hint {
     font-size: 0.85rem;
     color: var(--text-muted);
 }
 
 .bug-report-dropzone {
-    border: 1px dashed var(--border-soft);
-    border-radius: 16px;
-    padding: 16px;
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    border-radius: 18px;
+    padding: 18px;
     display: grid;
     gap: 8px;
     justify-items: center;
     text-align: center;
-    background: rgba(99, 102, 241, 0.06);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(14, 116, 144, 0.08));
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 [data-theme="dark"] .bug-report-dropzone {
-    background: rgba(148, 163, 184, 0.1);
+    background: rgba(148, 163, 184, 0.18);
+}
+
+.bug-report-dropzone:hover {
+    border-color: rgba(99, 102, 241, 0.4);
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
 }
 
 .bug-report-upload-button {
@@ -1431,18 +1474,19 @@ body {
     align-items: center;
     gap: 8px;
     border-radius: 999px;
-    border: 1px solid var(--border-soft);
-    padding: 8px 18px;
-    background: rgba(99, 102, 241, 0.08);
-    color: var(--text-primary);
+    border: none;
+    padding: 10px 20px;
+    background: var(--user-bg);
+    color: #fff;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.2s ease, transform 0.15s ease;
+    box-shadow: 0 12px 24px rgba(99, 102, 241, 0.25);
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
 }
 
 .bug-report-upload-button:hover {
-    background: rgba(99, 102, 241, 0.16);
     transform: translateY(-1px);
+    box-shadow: 0 16px 30px rgba(99, 102, 241, 0.32);
 }
 
 .bug-report-upload-button[disabled] {
@@ -1469,11 +1513,12 @@ body {
     align-items: center;
     padding: 10px 12px;
     border-radius: 14px;
-    background: rgba(148, 163, 184, 0.18);
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.12);
 }
 
 [data-theme="dark"] .bug-report-file-item {
-    background: rgba(71, 85, 105, 0.35);
+    background: rgba(99, 102, 241, 0.22);
 }
 
 .bug-report-file-meta {
@@ -1495,8 +1540,11 @@ body {
 .bug-report-file-summary {
     display: flex;
     justify-content: space-between;
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 12px;
+    padding: 8px 12px;
     font-size: 0.85rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
 }
 
 .bug-report-error {
